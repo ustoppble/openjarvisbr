@@ -10,6 +10,7 @@ colored = "3.1.1"
 cpal = "0.18.2"
 crossterm = "0.29.0"
 futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
+hound = "3"
 rubato = "5.0.0"
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 serde = { version = "1.0.229", features = ["derive"] }

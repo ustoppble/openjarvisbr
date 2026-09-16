@@ -17,6 +17,61 @@ use crate::audio::playback::{PlaybackError, Player};
 use crate::live::protocol::ServerEvent;
 use crate::live::session::{LiveConfig, LiveSession};
 
+/// Gravador de diagnóstico: o que foi pro alto-falante, o que foi pro
+/// modelo e a linha do tempo dos eventos. Só existe com `--record`.
+struct Recorder {
+    playback: hound::WavWriter<io::BufWriter<std::fs::File>>,
+    mic: hound::WavWriter<io::BufWriter<std::fs::File>>,
+    events: io::BufWriter<std::fs::File>,
+    started: Instant,
+}
+
+impl Recorder {
+    fn open(dir: &std::path::Path) -> io::Result<Self> {
+        std::fs::create_dir_all(dir)?;
+        let spec = |rate| hound::WavSpec {
+            channels: 1,
+            sample_rate: rate,
+            bits_per_sample: 16,
+            sample_format: hound::SampleFormat::Int,
+        };
+        let wav = |name: &str, rate| {
+            hound::WavWriter::create(dir.join(name), spec(rate))
+                .map_err(|e| io::Error::other(e.to_string()))
+        };
+        Ok(Self {
+            playback: wav("playback.wav", 24_000)?,
+            mic: wav("mic.wav", 16_000)?,
+            events: io::BufWriter::new(std::fs::File::create(dir.join("events.log"))?),
+            started: Instant::now(),
+        })
+    }
+
+    fn event(&mut self, what: &str, detail: impl std::fmt::Display) {
+        let ms = self.started.elapsed().as_millis();
+        let _ = writeln!(self.events, "{ms:>8}ms  {what:<14} {detail}");
+    }
+
+    fn playback(&mut self, samples: &[i16]) {
+        for &s in samples {
+            let _ = self.playback.write_sample(s);
+        }
+    }
+
+    fn mic(&mut self, samples: &[i16]) {
+        for &s in samples {
+            let _ = self.mic.write_sample(s);
+        }
+    }
+
+    fn finish(self) {
+        let _ = self.playback.finalize();
+        let _ = self.mic.finalize();
+        let mut events = self.events;
+        let _ = events.flush();
+    }
+}
+
 /// Capacidade dos canais internos entre threads de I/O e o loop async.
 const CHANNEL_CAPACITY: usize = 64;
 /// Folga depois do último áudio do modelo antes de reabrir o microfone no
@@ -44,6 +99,8 @@ pub struct AppConfig {
     /// Mic aberto enquanto o modelo fala (interrupção por voz). Desligado por
     /// padrão para evitar eco com caixa de som.
     pub barge_in: bool,
+    /// Pasta onde gravar playback.wav, mic.wav e events.log (diagnóstico).
+    pub record_dir: Option<std::path::PathBuf>,
 }
 
 /// Aplicação principal: mantém o estado atual da sessão.
@@ -108,6 +165,19 @@ impl App {
         let mut muted = false;
         let mut transcript = Transcript::default();
         let mut last_model_audio: Option<Instant> = None;
+        let mut recorder = match &self.config.record_dir {
+            Some(dir) => match Recorder::open(dir) {
+                Ok(r) => {
+                    print_line(format!("gravando diagnóstico em {}", dir.display()).dimmed());
+                    Some(r)
+                }
+                Err(err) => {
+                    eprintln!("não foi possível gravar em {}: {err}", dir.display());
+                    None
+                }
+            },
+            None => None,
+        };
         let exit_code = loop {
             tokio::select! {
                 chunk = audio_rx.recv() => {
@@ -121,6 +191,9 @@ impl App {
                             let gated = !self.config.barge_in
                                 && (player.is_playing() || recently_spoke);
                             if !muted && !gated {
+                                if let Some(r) = recorder.as_mut() {
+                                    r.mic(&samples);
+                                }
                                 session.send_audio(&samples);
                             }
                         }
@@ -134,20 +207,43 @@ impl App {
                         Some(ServerEvent::Audio(samples)) => {
                             self.state = State::Speaking;
                             last_model_audio = Some(Instant::now());
+                            if let Some(r) = recorder.as_mut() {
+                                r.event("audio", format!("{} amostras, fila={}", samples.len(), player.queued()));
+                                r.playback(&samples);
+                            }
                             player.push(&samples);
                         }
                         Some(ServerEvent::Interrupted) => {
+                            if let Some(r) = recorder.as_mut() {
+                                r.event("interrupted", format!("fila descartada={}", player.queued()));
+                            }
                             player.flush();
                             transcript.end_line();
                             self.state = State::Listening;
                         }
-                        Some(ServerEvent::UserText(text)) => transcript.user(&text),
-                        Some(ServerEvent::ModelText(text)) => transcript.model(&text),
+                        Some(ServerEvent::UserText(text)) => {
+                            if let Some(r) = recorder.as_mut() {
+                                r.event("user_text", &text);
+                            }
+                            transcript.user(&text);
+                        }
+                        Some(ServerEvent::ModelText(text)) => {
+                            if let Some(r) = recorder.as_mut() {
+                                r.event("model_text", &text);
+                            }
+                            transcript.model(&text);
+                        }
                         Some(ServerEvent::TurnComplete) => {
+                            if let Some(r) = recorder.as_mut() {
+                                r.event("turn_complete", "");
+                            }
                             player.end_of_turn();
                             transcript.end_line();
                         }
                         Some(ServerEvent::GoAway) => {
+                            if let Some(r) = recorder.as_mut() {
+                                r.event("go_away", "reconectando");
+                            }
                             info!("servidor pediu encerramento (goAway); reconectando");
                         }
                         Some(ServerEvent::Closed) | None => {
@@ -183,6 +279,9 @@ impl App {
             }
         };
 
+        if let Some(r) = recorder.take() {
+            r.finish();
+        }
         capture_handle.stop();
         drop(raw_mode);
         exit_code

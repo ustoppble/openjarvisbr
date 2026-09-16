@@ -31,6 +31,10 @@ struct Cli {
     #[arg(long)]
     barge_in: bool,
 
+    /// Grava playback.wav, mic.wav e events.log nesta pasta (diagnóstico)
+    #[arg(long, value_name = "PASTA")]
+    record: Option<std::path::PathBuf>,
+
     /// Ativa logs em nível debug
     #[arg(long)]
     debug: bool,
@@ -69,6 +73,7 @@ fn main() {
         device_in: cli.device_in,
         device_out: cli.device_out,
         barge_in: cli.barge_in,
+        record_dir: cli.record,
     });
     let exit_code = runtime.block_on(app.run());
     std::process::exit(exit_code);

@@ -253,6 +253,15 @@ impl Player {
             .is_empty()
     }
 
+    /// Amostras (já expandidas por canal) ainda na fila.
+    pub fn queued(&self) -> usize {
+        self.queue
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .samples
+            .len()
+    }
+
     /// O modelo terminou o turno: toca o que restou na fila mesmo que seja
     /// menor que o prebuffer.
     pub fn end_of_turn(&self) {
