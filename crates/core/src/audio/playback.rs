@@ -16,6 +16,7 @@ use std::sync::{Arc, Mutex};
 use ringbuf::traits::{Consumer, Observer, Producer, Split};
 use ringbuf::{HeapCons, HeapProd, HeapRb};
 
+use super::aec::{self, EchoReference, ReferenceTap};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{FromSample, SampleFormat, SizedSample, StreamConfig};
 use rubato::audioadapter_buffers::direct::InterleavedSlice;
@@ -97,6 +98,9 @@ struct Sink {
     shared: Arc<Shared>,
     primed: bool,
     seen_generation: u32,
+    /// Cópia mono do que toca, para o cancelamento de eco.
+    tap: Option<ReferenceTap>,
+    channels: usize,
 }
 
 impl Sink {
@@ -108,8 +112,14 @@ impl Sink {
             self.primed = false;
             self.seen_generation = generation;
         }
-        for slot in data.iter_mut() {
-            *slot = T::from_sample(self.next_sample());
+        for (i, slot) in data.iter_mut().enumerate() {
+            let sample = self.next_sample();
+            if i % self.channels == 0 {
+                if let Some(tap) = self.tap.as_mut() {
+                    tap.push(sample);
+                }
+            }
+            *slot = T::from_sample(sample);
         }
     }
 
@@ -210,6 +220,22 @@ impl Player {
     /// e prepara o reprodutor. Resampleia se o dispositivo não aceitar
     /// 24kHz.
     pub fn new(device_name: Option<&str>) -> Result<Player, PlaybackError> {
+        Self::open(device_name, false).map(|(player, _)| player)
+    }
+
+    /// Como [`Player::new`], e devolve também a referência do que o
+    /// dispositivo toca de fato (já na taxa dele), para o cancelamento de eco.
+    pub fn with_echo_reference(
+        device_name: Option<&str>,
+    ) -> Result<(Player, EchoReference), PlaybackError> {
+        Self::open(device_name, true)
+            .map(|(player, reference)| (player, reference.expect("referência pedida")))
+    }
+
+    fn open(
+        device_name: Option<&str>,
+        echo_reference: bool,
+    ) -> Result<(Player, Option<EchoReference>), PlaybackError> {
         let host = cpal::default_host();
         let device = match device_name {
             Some(name) => host
@@ -249,11 +275,20 @@ impl Player {
         });
         let (prod, cons) =
             HeapRb::<i16>::new(device_rate as usize * device_channels * RING_SECONDS).split();
+        let (tap, reference) = match echo_reference {
+            true => {
+                let (tap, reference) = aec::reference_channel(device_rate);
+                (Some(tap), Some(reference))
+            }
+            false => (None, None),
+        };
         let sink = Sink {
             cons,
             shared: shared.clone(),
             primed: false,
             seen_generation: 0,
+            tap,
+            channels: device_channels,
         };
         let stream = build_stream(&device, &stream_config, sample_format, sink)?;
         stream.play()?;
@@ -264,13 +299,14 @@ impl Player {
             None
         };
 
-        Ok(Player {
+        let player = Player {
             prod: Mutex::new(prod),
             shared,
             resampling,
             device_channels,
             _stream: stream,
-        })
+        };
+        Ok((player, reference))
     }
 
     /// Enfileira amostras PCM i16 24kHz mono para reprodução.
@@ -401,6 +437,8 @@ mod tests {
             shared: shared.clone(),
             primed: false,
             seen_generation: 0,
+            tap: None,
+            channels: 1,
         };
         (prod, sink, shared)
     }
@@ -417,6 +455,21 @@ mod tests {
         sink.fill(&mut out);
         assert_eq!(out, [1, 2, 3, 4, 0, 0]);
         assert!(!sink.primed, "esvaziou: volta a esperar o prebuffer");
+    }
+
+    #[test]
+    fn tap_copies_first_channel_of_what_plays() {
+        let (mut prod, mut sink, _shared) = sink(1, 64);
+        let (tap, mut reference) = aec::reference_channel(aec::AEC_RATE);
+        sink.tap = Some(tap);
+        sink.channels = 2;
+        prod.push_slice(&[5, 5, -3, -3]);
+        let mut out = [0i16; 6];
+        sink.fill(&mut out);
+        assert_eq!(out, [5, 5, -3, -3, 0, 0]);
+        let mut played = Vec::new();
+        reference.drain_into(&mut played);
+        assert_eq!(played, vec![5.0 / 32768.0, -3.0 / 32768.0, 0.0], "silêncio também é referência");
     }
 
     #[test]

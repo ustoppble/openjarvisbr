@@ -22,5 +22,11 @@ tokio-tungstenite.workspace = true
 toml.workspace = true
 tracing.workspace = true
 
+# AEC3 do WebRTC só no macOS: o build C++ (meson/ninja/clang) não existe no
+# CI Windows; lá `audio::aec` usa um NLMS próprio.
+[target.'cfg(target_os = "macos")'.dependencies]
+webrtc-audio-processing = { version = "2.1.0", features = ["bundled"] }
+webrtc-audio-processing-config = "2.1.0"
+
 [dev-dependencies]
 tracing-subscriber.workspace = true

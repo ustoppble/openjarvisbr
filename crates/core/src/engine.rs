@@ -18,6 +18,7 @@ use thiserror::Error;
 use tokio::sync::{broadcast, mpsc, oneshot, watch};
 use tracing::{info, warn};
 
+use crate::audio::aec::EchoCanceller;
 use crate::audio::capture::{self, CaptureError, CaptureHandle};
 use crate::audio::fx::VoiceFx;
 use crate::audio::playback::{PlaybackError, Player};
@@ -556,6 +557,8 @@ struct Worker {
     mic: Option<mpsc::Receiver<Vec<i16>>>,
     _capture: Option<CaptureHandle>,
     output: Output,
+    /// Cancelamento de eco do mic; só existe com `barge_in`.
+    aec: Option<EchoCanceller>,
     voice_fx: VoiceFx,
     recorder: Option<Recorder>,
     state: Option<EngineState>,
@@ -643,23 +646,35 @@ impl Worker {
         // este `config` e não deve repeti-lo.
         config.greeting = None;
 
-        let (mic, capture, output) = match &mut backend {
+        let (mic, capture, output, aec) = match &mut backend {
             Backend::Real => {
                 let (std_tx, std_rx) = std_mpsc::channel::<Vec<i16>>();
                 let capture = capture::start(config.device_in.as_deref(), std_tx)
                     .map_err(EngineError::Capture)?;
-                let player =
-                    Player::new(config.device_out.as_deref()).map_err(EngineError::Playback)?;
+                // Barge-in com caixa de som: o mic passa pelo cancelamento de
+                // eco com o que o player toca como referência.
+                let (player, aec) = if config.barge_in {
+                    let (player, reference) =
+                        Player::with_echo_reference(config.device_out.as_deref())
+                            .map_err(EngineError::Playback)?;
+                    info!(cancelador = EchoCanceller::backend(), "cancelamento de eco ligado");
+                    (player, Some(EchoCanceller::new(reference)))
+                } else {
+                    let player = Player::new(config.device_out.as_deref())
+                        .map_err(EngineError::Playback)?;
+                    (player, None)
+                };
                 (
                     bridge_capture_channel(std_rx),
                     Some(capture),
                     Output::Device(Box::new(player)),
+                    aec,
                 )
             }
             #[cfg(test)]
-            Backend::Fake(fake) => (fake.take_mic(), None, Output::Null),
+            Backend::Fake(fake) => (fake.take_mic(), None, Output::Null, None),
             #[cfg(test)]
-            Backend::LiveMic(mic) => (mic.take().expect("mic já usado"), None, Output::Null),
+            Backend::LiveMic(mic) => (mic.take().expect("mic já usado"), None, Output::Null, None),
         };
 
         let recorder = config.record_dir.as_ref().and_then(|dir| match Recorder::open(dir) {
@@ -699,6 +714,7 @@ impl Worker {
             session: Some(session),
             mic: Some(mic),
             _capture: capture,
+            aec,
             output,
             recorder,
             state: Some(EngineState::Connecting),
@@ -769,6 +785,9 @@ impl Worker {
             .last_model_audio
             .is_some_and(|t| t.elapsed() < MIC_REOPEN_DELAY);
         let gated = !self.config.barge_in && (self.output.is_playing() || recently_spoke);
+        // Com barge-in, o AEC consome a referência a cada chunk (mesmo mudo,
+        // para ela não acumular) e o gate residual descarta o que é só eco.
+        let cleaned = self.aec.as_mut().map(|aec| aec.process(&samples));
         if self.muted {
             return;
         }
@@ -776,6 +795,11 @@ impl Worker {
         if gated {
             return;
         }
+        let samples = match cleaned {
+            Some(Some(cleaned)) => cleaned,
+            Some(None) => return,
+            None => samples,
+        };
         if let Some(session) = self.session.as_mut() {
             if let Some(r) = self.recorder.as_mut() {
                 r.mic(&samples);
