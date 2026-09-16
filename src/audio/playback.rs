@@ -129,6 +129,50 @@ struct Resampling {
     pending: Vec<f32>,
 }
 
+impl Resampling {
+    fn new(device_rate: u32) -> Result<Self, rubato::ResamplerConstructionError> {
+        let ratio = device_rate as f64 / SOURCE_RATE as f64;
+        let engine = Async::<f32>::new_poly(
+            ratio,
+            1.0,
+            PolynomialDegree::Cubic,
+            RESAMPLE_CHUNK_FRAMES,
+            SOURCE_CHANNELS,
+            FixedAsync::Input,
+        )?;
+        Ok(Self {
+            engine,
+            pending: Vec::new(),
+        })
+    }
+
+    /// Alimenta amostras 24kHz e devolve o que já pôde ser convertido
+    /// para a taxa do dispositivo (mono, f32 na escala i16).
+    fn feed(&mut self, samples: &[i16]) -> Vec<f32> {
+        self.pending.extend(samples.iter().map(|&s| s as f32));
+        let mut out = Vec::new();
+        loop {
+            let needed = self.engine.input_frames_next();
+            if self.pending.len() < needed {
+                break;
+            }
+            let input =
+                InterleavedSlice::new(&self.pending[..needed], SOURCE_CHANNELS, needed).unwrap();
+            let out_frames = self.engine.output_frames_next();
+            let mut out_buf = vec![0f32; out_frames];
+            let mut output =
+                InterleavedSlice::new_mut(&mut out_buf, SOURCE_CHANNELS, out_frames).unwrap();
+            let (consumed, produced) = self
+                .engine
+                .process_into_buffer(&input, &mut output, None)
+                .expect("resample de playback");
+            self.pending.drain(..consumed);
+            out.extend_from_slice(&out_buf[..produced]);
+        }
+        out
+    }
+}
+
 /// Reprodutor de PCM i16 24kHz mono. `push` enfileira, `flush` descarta a
 /// fila (interrupção).
 pub struct Player {
@@ -193,19 +237,7 @@ impl Player {
         stream.play()?;
 
         let resampling = if needs_resample {
-            let ratio = device_rate as f64 / SOURCE_RATE as f64;
-            let engine = Async::<f32>::new_poly(
-                ratio,
-                1.0,
-                PolynomialDegree::Cubic,
-                RESAMPLE_CHUNK_FRAMES,
-                SOURCE_CHANNELS,
-                FixedAsync::Input,
-            )?;
-            Some(Mutex::new(Resampling {
-                engine,
-                pending: Vec::new(),
-            }))
+            Some(Mutex::new(Resampling::new(device_rate)?))
         } else {
             None
         };
@@ -229,30 +261,9 @@ impl Player {
 
     fn push_resampled(&self, resampling: &Mutex<Resampling>, samples: &[i16]) {
         let mut guard = resampling.lock().unwrap_or_else(|e| e.into_inner());
-        let state = &mut *guard;
-        state.pending.extend(samples.iter().map(|&s| s as f32));
-
-        loop {
-            let needed = state.engine.input_frames_next();
-            if state.pending.len() < needed {
-                break;
-            }
-
-            let input =
-                InterleavedSlice::new(&state.pending[..needed], SOURCE_CHANNELS, needed).unwrap();
-            let out_frames = state.engine.output_frames_next();
-            let mut out_buf = vec![0f32; out_frames];
-            let mut output =
-                InterleavedSlice::new_mut(&mut out_buf, SOURCE_CHANNELS, out_frames).unwrap();
-
-            let (consumed, produced) = state
-                .engine
-                .process_into_buffer(&input, &mut output, None)
-                .expect("resample de playback");
-
-            state.pending.drain(..consumed);
-            self.enqueue_f32(&out_buf[..produced]);
-        }
+        let out = guard.feed(samples);
+        drop(guard);
+        self.enqueue_f32(&out);
     }
 
     fn enqueue_i16(&self, samples: &[i16]) {
@@ -395,6 +406,34 @@ mod tests {
         sink.fill(&mut out);
         assert_eq!(out, [7, 8, 0]);
         assert!(!shared.drain.load(Ordering::Acquire), "drain consumido");
+    }
+
+    #[test]
+    fn resample_24k_to_48k_keeps_a_sine_continuous() {
+        // Seno de 440Hz a 24kHz, entregue em chunks com os tamanhos reais
+        // que a Live API manda. Na saída a 48kHz não pode haver salto maior
+        // que o de um seno contínuo (amplitude 10000 → ~576 por amostra).
+        let mut rs = Resampling::new(48_000).unwrap();
+        let sizes = [3840usize, 5760, 4800, 3840, 7680, 1920, 5760, 4800];
+        let mut t = 0usize;
+        let mut out = Vec::new();
+        for &n in &sizes {
+            let chunk: Vec<i16> = (0..n)
+                .map(|i| {
+                    let x = (t + i) as f32 / 24_000.0;
+                    (10_000.0 * (2.0 * std::f32::consts::PI * 440.0 * x).sin()) as i16
+                })
+                .collect();
+            t += n;
+            out.extend(rs.feed(&chunk));
+        }
+        let total_in: usize = sizes.iter().sum();
+        assert!(out.len() > total_in * 2 - 4000, "produziu {} de ~{}", out.len(), total_in * 2);
+        let max_jump = out
+            .windows(2)
+            .map(|w| (w[1] - w[0]).abs())
+            .fold(0f32, f32::max);
+        assert!(max_jump < 900.0, "descontinuidade no resample: salto {max_jump}");
     }
 
     #[test]
