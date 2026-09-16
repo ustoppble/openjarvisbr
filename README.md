@@ -3,8 +3,8 @@
 Assistente de voz open source, em Rust, que conversa com você em tempo real usando o
 **Gemini 3.8 Live** do Google. Roda no terminal do Mac hoje e no Windows em breve.
 
-> Status: **v1 em construção**. O degrau 1 (só conversa) está sendo implementado card a
-> card. Ainda não há binário pronto pra uso.
+> Status: **v3** — conversa, app de desktop, perfis e ferramentas (locais, Overclock e
+> OverClick) com confirmação por voz.
 
 ## Baixar
 
@@ -28,12 +28,43 @@ O CI (`.github/workflows/ci.yml`) roda em todo push e PR na `main`, só no Windo
 `cargo test`, `cargo clippy -D warnings` e `npm run tauri build` sem publicar (os
 instaladores ficam como artefatos do run).
 
-## O que ele faz (v1)
+## O que o Jarvis faz
 
-- Escuta o microfone e responde em áudio, com latência de conversa.
-- Interrupção natural: fale por cima e ele para.
-- Transcrição dos dois lados aparece no terminal.
-- Reconecta sozinho quando a sessão da Live API cai ou expira.
+- **Conversa por voz** em tempo real: escuta o microfone, responde em áudio, aceita
+  interrupção (fale por cima e ele para) e reconecta sozinho quando a sessão cai.
+- **App de desktop** na bandeja, sempre ouvindo, com overlay flutuante estilo Siri e
+  atalho global pra mutar.
+- **Perfis:** cinco personalidades prontas — Assistente pessoal, Professor de inglês,
+  Terapeuta de apoio, Mentor de negócios e Parceiro de código — trocadas pelo menu do
+  ícone ou pelas Configurações. Cada perfil define voz, jeito de falar e **quais
+  ferramentas pode usar** (o Professor e o Terapeuta só conversam).
+- **Ferramentas locais:** abre apps (`app.open`) e sites (`web.open`), roda comandos
+  no terminal (`shell.run`, timeout 30s, sem sudo), lê, escreve e lista arquivos
+  (`fs.*`, só dentro do home), ajusta volume e mídia, cria eventos na agenda e
+  lembretes.
+- **Confirmação em ações arriscadas:** rodar comando, escrever arquivo, criar evento e
+  ações que alteram algo no Overclock/OverClick pedem "confirma?" — responda "sim"/"não"
+  por voz ou clique nos botões do overlay. Sem resposta em 20s, a ação é negada.
+- **Overclock e OverClick por voz (MCP):** o Jarvis lista e abre panes, lê o que um
+  pane entregou e cria cards no OverClick. Os servidores entram em
+  `~/.config/jarvis/config.toml` com o token só por nome de variável de ambiente:
+
+  ```toml
+  [tools]
+  enabled = true
+
+  [[mcp_servers]]
+  name = "overclock"
+  url = "http://127.0.0.1:${OVERCLOCK_MCP_PORT}/mcp"
+  bearer_env = "OVERCLOCK_MCP_BEARER_TOKEN"
+
+  [[mcp_servers]]
+  name = "overclick"
+  url = "https://cloud.overclock.sh/mcp"
+  bearer_env = "OVERCLICK_MCP_BEARER_TOKEN"
+  ```
+
+Roteiro leigo das ferramentas: [`docs/testes/v3.md`](docs/testes/v3.md).
 
 ## Roadmap por degraus
 
@@ -41,11 +72,11 @@ Cada degrau é uma entrega separada, com spec própria.
 
 | Degrau | O que entra | Status |
 |---|---|---|
-| 1 | Conversa por voz no terminal | em construção |
-| 2 | Ícone na bandeja e atalho global | planejado |
+| 1 | Conversa por voz no terminal | pronto (v1) |
+| 2 | Ícone na bandeja e atalho global | pronto (v2) |
 | 3 | Visão de tela (frames a 1 fps) | planejado |
-| 4 | Ferramentas: rodar comandos com confirmação por voz | planejado |
-| 5 | Integração com o Overclock (abrir panes, criar cards) | planejado |
+| 4 | Ferramentas: rodar comandos com confirmação por voz | pronto (v3) |
+| 5 | Integração com o Overclock (abrir panes, criar cards) | pronto (v3) |
 
 ## Configurar a chave
 
