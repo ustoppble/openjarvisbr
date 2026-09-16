@@ -22,6 +22,10 @@ struct FileConfig {
     device_in: Option<String>,
     device_out: Option<String>,
     barge_in: Option<bool>,
+    /// "jarvis" (padrão) ou "off".
+    voice_fx: Option<String>,
+    /// Intensidade do efeito, 0.0 a 1.0 (padrão 0.35).
+    voice_fx_amount: Option<f32>,
 }
 
 /// Identidade padrão da OpenJarvisBR. Pode ser trocada por `system_prompt`
@@ -41,6 +45,10 @@ Ao ensinar (ex.: inglês do zero): assuma que ele é iniciante absoluto, vá uma
 frase por vez, explique em português o que significa, peça para ele repetir, \
 elogie de forma curta e siga em frente. Respostas curtas: isto é voz, não texto.\n\
 \n\
+Tom de voz: constante e sereno do início ao fim, ritmo uniforme, levemente \
+formal, como um assistente de bordo. Não dramatize, não fique eufórico nem \
+melancólico, não mude a emoção entre uma frase e outra.\n\
+\n\
 Memória: preste atenção ao que ele diz ao longo da conversa e retome quando fizer \
 sentido (nomes, metas, decisões). Ele está fazendo uma live enquanto fala com você: \
 às vezes se dirige à audiência ('gurizada'); nesses momentos, não interrompa e \
@@ -54,6 +62,8 @@ pub struct Settings {
     pub device_in: Option<String>,
     pub device_out: Option<String>,
     pub barge_in: Option<bool>,
+    pub voice_fx: Option<String>,
+    pub voice_fx_amount: Option<f32>,
 }
 
 impl FileConfig {
@@ -121,6 +131,8 @@ pub fn load_settings() -> Settings {
         device_in: parsed.device_in.filter(|s| !s.trim().is_empty()),
         device_out: parsed.device_out.filter(|s| !s.trim().is_empty()),
         barge_in: parsed.barge_in,
+        voice_fx: parsed.voice_fx.filter(|s| !s.trim().is_empty()),
+        voice_fx_amount: parsed.voice_fx_amount,
     }
 }
 

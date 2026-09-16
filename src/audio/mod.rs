@@ -7,4 +7,5 @@
 pub mod capture;
 pub mod resample;
 
+pub mod fx;
 pub mod playback;

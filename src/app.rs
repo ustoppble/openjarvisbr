@@ -13,6 +13,7 @@ use tokio::sync::mpsc;
 use tracing::{info, warn};
 
 use crate::audio::capture::{self, CaptureError, CaptureHandle};
+use crate::audio::fx::VoiceFx;
 use crate::audio::playback::{PlaybackError, Player};
 use crate::live::protocol::ServerEvent;
 use crate::live::session::{LiveConfig, LiveSession};
@@ -108,6 +109,8 @@ pub struct AppConfig {
     pub record_dir: Option<std::path::PathBuf>,
     /// Instrução de sistema enviada no setup.
     pub system_prompt: String,
+    /// Intensidade do efeito de voz (0 = desligado).
+    pub fx_amount: f32,
 }
 
 /// Aplicação principal: mantém o estado atual da sessão.
@@ -177,6 +180,10 @@ impl App {
         let mut muted = false;
         let mut transcript = Transcript::default();
         let mut last_model_audio: Option<Instant> = None;
+        let mut voice_fx = VoiceFx::new(self.config.fx_amount);
+        if voice_fx.amount() > 0.0 {
+            print_line(format!("efeito de voz jarvis: {:.2} (--fx-amount ajusta)", voice_fx.amount()).dimmed());
+        }
         let mut recorder = match &self.config.record_dir {
             Some(dir) => match Recorder::open(dir) {
                 Ok(r) => {
@@ -216,13 +223,14 @@ impl App {
                 }
                 event = session.next_event() => {
                     match event {
-                        Some(ServerEvent::Audio(samples)) => {
+                        Some(ServerEvent::Audio(mut samples)) => {
                             self.state = State::Speaking;
                             last_model_audio = Some(Instant::now());
                             if let Some(r) = recorder.as_mut() {
                                 r.event("audio", format!("{} amostras, fila={}", samples.len(), player.queued()));
                                 r.playback(&samples);
                             }
+                            voice_fx.process(&mut samples);
                             player.push(&samples);
                         }
                         Some(ServerEvent::Interrupted) => {

@@ -31,6 +31,10 @@ struct Cli {
     #[arg(long)]
     barge_in: bool,
 
+    /// Intensidade do efeito de voz "Jarvis", 0.0 (desliga) a 1.0
+    #[arg(long, value_name = "0..1")]
+    fx_amount: Option<f32>,
+
     /// Grava playback.wav, mic.wav e events.log nesta pasta (diagnóstico)
     #[arg(long, value_name = "PASTA")]
     record: Option<std::path::PathBuf>,
@@ -119,6 +123,13 @@ fn main() {
         device_out: cli.device_out.or(settings.device_out),
         barge_in: cli.barge_in || settings.barge_in.unwrap_or(false),
         record_dir: cli.record,
+        fx_amount: cli.fx_amount.unwrap_or_else(|| {
+            if settings.voice_fx.as_deref() == Some("off") {
+                0.0
+            } else {
+                settings.voice_fx_amount.unwrap_or(0.35)
+            }
+        }),
         system_prompt: settings
             .system_prompt
             .unwrap_or_else(|| config::DEFAULT_SYSTEM_PROMPT.to_string()),
