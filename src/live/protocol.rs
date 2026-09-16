@@ -254,6 +254,9 @@ pub enum ServerEvent {
     Interrupted,
     UserText(String),
     ModelText(String),
+    /// O modelo terminou o turno (`serverContent.turnComplete`): a UI pode
+    /// fechar a linha da transcrição corrente.
+    TurnComplete,
     GoAway,
     /// Produzido por `session.rs` quando o socket fecha — nunca vem de
     /// `parse`, que só lê mensagens JSON efetivamente recebidas.
@@ -266,7 +269,7 @@ pub enum ProtocolError {
     Audio(base64::DecodeError),
     /// A mensagem é uma mensagem de protocolo válida, mas não corresponde a
     /// nenhuma variante de `ServerEvent` (ex.: `setupComplete`, ou um
-    /// `serverContent` que só carrega `turnComplete`). Não é um erro de
+    /// `serverContent` vazio). Não é um erro de
     /// parsing — é sinal para quem chama ignorar esta mensagem.
     NoEvent,
 }
@@ -310,6 +313,9 @@ pub fn parse(raw: &str) -> Result<ServerEvent, ProtocolError> {
         if let Some(turn) = content.model_turn {
             return decode_audio(&turn);
         }
+        if content.turn_complete {
+            return Ok(ServerEvent::TurnComplete);
+        }
     }
 
     Err(ProtocolError::NoEvent)
@@ -339,6 +345,12 @@ fn decode_audio(turn: &ModelTurn) -> Result<ServerEvent, ProtocolError> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn turn_complete_alone_is_an_event() {
+        let raw = r#"{"serverContent":{"turnComplete":true}}"#;
+        assert_eq!(parse(raw).unwrap(), ServerEvent::TurnComplete);
+    }
+
     use super::*;
 
     fn fixture(name: &str) -> String {

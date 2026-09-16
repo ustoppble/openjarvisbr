@@ -97,6 +97,7 @@ impl App {
         print_line("ouvindo — fale quando quiser (M muta o microfone, Ctrl+C encerra)");
 
         let mut muted = false;
+        let mut transcript = Transcript::default();
         let exit_code = loop {
             tokio::select! {
                 chunk = audio_rx.recv() => {
@@ -119,14 +120,17 @@ impl App {
                         }
                         Some(ServerEvent::Interrupted) => {
                             player.flush();
+                            transcript.end_line();
                             self.state = State::Listening;
                         }
-                        Some(ServerEvent::UserText(text)) => print_user(&text),
-                        Some(ServerEvent::ModelText(text)) => print_model(&text),
+                        Some(ServerEvent::UserText(text)) => transcript.user(&text),
+                        Some(ServerEvent::ModelText(text)) => transcript.model(&text),
+                        Some(ServerEvent::TurnComplete) => transcript.end_line(),
                         Some(ServerEvent::GoAway) => {
                             info!("servidor pediu encerramento (goAway); reconectando");
                         }
                         Some(ServerEvent::Closed) | None => {
+                            transcript.end_line();
                             break match session.error() {
                                 Some(err) => {
                                     self.state = State::Error;
@@ -142,6 +146,7 @@ impl App {
                     match control {
                         ControlEvent::ToggleMute => {
                             muted = !muted;
+                            transcript.end_line();
                             print_line(if muted { "[mic mudo]".yellow() } else { "[mic ativo]".yellow() });
                         }
                         ControlEvent::Quit => {
@@ -281,18 +286,53 @@ fn spawn_key_thread(enabled: bool) -> (mpsc::Receiver<ControlEvent>, mpsc::Sende
     (rx, tx)
 }
 
-fn print_user(text: &str) {
-    if text.trim().is_empty() {
-        return;
-    }
-    print_line(format!("{} {text}", "Você:".bright_cyan().bold()));
+/// Quem está com a palavra na linha corrente do terminal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Speaker {
+    User,
+    Model,
 }
 
-fn print_model(text: &str) {
-    if text.trim().is_empty() {
-        return;
+/// Junta os pedaços de transcrição que a Live API manda em chunks numa
+/// única linha por turno: o prefixo só aparece quando o falante muda, e a
+/// linha só fecha em `end_line` (turno completo, interrupção, mute, saída).
+#[derive(Default)]
+struct Transcript {
+    current: Option<Speaker>,
+}
+
+impl Transcript {
+    fn user(&mut self, text: &str) {
+        self.append(Speaker::User, text);
     }
-    print_line(format!("{} {text}", "OpenJarvisBR:".bright_green().bold()));
+
+    fn model(&mut self, text: &str) {
+        self.append(Speaker::Model, text);
+    }
+
+    fn append(&mut self, speaker: Speaker, text: &str) {
+        if text.trim().is_empty() {
+            return;
+        }
+        if self.current != Some(speaker) {
+            self.end_line();
+            let prefix = match speaker {
+                Speaker::User => "Você:".bright_cyan().bold(),
+                Speaker::Model => "OpenJarvisBR:".bright_green().bold(),
+            };
+            print!("{prefix} ");
+            self.current = Some(speaker);
+        }
+        print!("{text}");
+        let _ = io::stdout().flush();
+    }
+
+    fn end_line(&mut self) {
+        if self.current.take().is_some() {
+            print!("\r\n");
+            let _ = io::stdout().flush();
+        }
+    }
 }
 
 /// `print!` com `\r\n` explícito: em modo raw o terminal não traduz `\n`
