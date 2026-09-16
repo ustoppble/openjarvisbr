@@ -46,8 +46,11 @@ instaladores ficam como artefatos do run).
   ações que alteram algo no Overclock/OverClick pedem "confirma?" — responda "sim"/"não"
   por voz ou clique nos botões do overlay. Sem resposta em 20s, a ação é negada.
 - **Overclock e OverClick por voz (MCP):** o Jarvis lista e abre panes, lê o que um
-  pane entregou e cria cards no OverClick. Os servidores entram em
-  `~/.config/jarvis/config.toml` com o token só por nome de variável de ambiente:
+  pane entregou e cria cards no OverClick. Conecte em **Configurações › Ferramentas ›
+  Servidores MCP** (botões **Conectar Overclock** e **Conectar OverClick**): o token
+  colado ali fica no Keychain do Mac, nunca no config. A mesma aba mostra as permissões
+  do macOS (Acessibilidade, Automação) com status ao vivo. Quem preferir arquivo usa
+  `~/.config/jarvis/config.toml`, com o token só por nome de variável de ambiente:
 
   ```toml
   [tools]
