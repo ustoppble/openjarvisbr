@@ -12,6 +12,7 @@ crossterm = "0.29.0"
 fs4 = { version = "0.13", features = ["sync"] }
 futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
 hound = "3"
+reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider", "http2"] }
 ringbuf = "0.4"
 rubato = "5.0.0"
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }

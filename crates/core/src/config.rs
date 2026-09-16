@@ -8,6 +8,8 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
+use crate::mcp::McpServerConfig;
+
 const ENV_KEY: &str = "GEMINI_API_KEY";
 
 /// Padrão quando `overlay_style` está ausente ou inválido no config.toml.
@@ -44,6 +46,9 @@ struct FileConfig {
     /// Visual do overlay: "surreal" (cena 3D, padrão) ou "orb" (orb de 7
     /// pontos, mais leve).
     overlay_style: Option<String>,
+    /// Servidores MCP, `[[mcp_servers]]` no config.toml.
+    #[serde(default)]
+    mcp_servers: Vec<McpServerConfig>,
 }
 
 /// Marcador substituído pelo nome (ou por "você", sem nome) num
@@ -121,6 +126,8 @@ pub struct Settings {
     pub voice_fx_amount: Option<f32>,
     pub user_name: Option<String>,
     pub overlay_style: Option<String>,
+    /// Servidores MCP (`[[mcp_servers]]`).
+    pub mcp_servers: Vec<McpServerConfig>,
 }
 
 /// Estilo do overlay já resolvido: `surreal` (padrão) ou `orb`.
@@ -150,6 +157,8 @@ struct FileConfigOut {
     voice_fx_amount: Option<f32>,
     user_name: Option<String>,
     overlay_style: String,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    mcp_servers: Vec<McpServerConfig>,
 }
 
 /// Campos que a janela de configurações grava. `api_key` só vem preenchido
@@ -239,6 +248,7 @@ pub fn load_settings() -> Settings {
         voice_fx_amount: parsed.voice_fx_amount,
         user_name: parsed.user_name.filter(|s| !s.trim().is_empty()),
         overlay_style: parsed.overlay_style,
+        mcp_servers: parsed.mcp_servers,
     }
 }
 
@@ -297,6 +307,7 @@ pub fn save(update: SaveSettings) -> Result<(), ConfigError> {
         voice_fx_amount: update.voice_fx_amount,
         user_name: update.user_name.filter(|s| !s.trim().is_empty()),
         overlay_style: normalize_overlay_style(Some(update.overlay_style)),
+        mcp_servers: existing.mcp_servers,
     };
 
     let toml_str = toml::to_string_pretty(&out).map_err(ConfigError::SerializeFile)?;
