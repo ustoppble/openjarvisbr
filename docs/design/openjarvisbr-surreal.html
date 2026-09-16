@@ -62,6 +62,10 @@
     .state:hover { color: #fff; background: #ffffff06; }
     .state[aria-pressed="true"] { background: #ff925713; border-color: #ff925738; color: #ffc19d; }
     .state .number { font-family: monospace; font-size: 9px; opacity: .58; }
+    .state.auto-button { flex: .7; position: relative; overflow: hidden; }
+    .auto-button svg { width: 14px; height: 14px; }
+    .auto-button::after { content: ""; position: absolute; left: 8px; right: 8px; bottom: 3px; height: 1px; background: var(--accent); transform: scaleX(var(--progress, 0)); transform-origin: left; }
+    .auto-button[aria-pressed="false"]::after { opacity: 0; }
     .state-symbol { width: 15px; height: 15px; position: relative; display: inline-flex; align-items: center; justify-content: center; }
     .state-symbol.idle::before { content: ""; width: 8px; height: 8px; border: 1px solid currentColor; border-radius: 50%; }
     .state-symbol.listen { border: 1px solid currentColor; border-radius: 50%; width: 11px; height: 11px; margin: 0 2px; }
@@ -82,7 +86,11 @@
     .dock-bottom .icon-button { border: 0; background: transparent; width: 38px; min-width: 44px; height: 44px; color: #bbc9d0; }
     .dock-bottom .icon-button:hover { background: #ffffff0a; }
     .dock-bottom .icon-button[aria-pressed="true"] { color: var(--accent); }
-    .footer { position: absolute; bottom: 25px; left: 36px; right: 36px; display: flex; align-items: center; justify-content: space-between; gap: 20px; }
+    .footer { position: absolute; bottom: 12px; left: 36px; right: 36px; display: flex; align-items: center; justify-content: space-between; gap: 20px; }
+    .audio-console { display: flex; align-items: center; gap: 14px; min-width: 0; }
+    .sound-button { padding: 0 12px; font-size: 10px; color: #ffbe99; white-space: nowrap; }
+    .sound-button[aria-pressed="true"] { color: #93e9ee; border-color: #93e9ee55; background: #93e9ee08; }
+    #volume { flex: none; width: 68px; min-width: 48px; }
     .source { display: flex; align-items: center; gap: 11px; color: var(--muted); font-size: 9px; letter-spacing: .07em; }
     .meter { height: 15px; width: 39px; display: flex; align-items: center; gap: 3px; color: #9ac0c9; }
     .meter i { height: 100%; width: 2px; background: currentColor; transform: scaleY(.15); border-radius: 1px; }
@@ -107,7 +115,8 @@
     body.transparent { background: transparent; }
     body.transparent .watermark { display: none; }
     .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
-    @media (max-width: 1000px) { .annotation { display: none; } .hint { font-size: 8px; } .performance .auto { display: none; } }
+    @media (max-width: 1100px) { .hint { display: none; } }
+    @media (max-width: 1000px) { .annotation { display: none; } .performance .auto { display: none; } }
     @media (max-width: 640px) {
       .topbar { top: max(18px, env(safe-area-inset-top)); left: 20px; right: 20px; height: 63px; }
       .wordmark { font-size: 13px; letter-spacing: .19em; } .brand { gap: 9px; } .brand-mark { width: 28px; } .brand-caption { font-size: 7px; }
@@ -118,8 +127,9 @@
       .dock { bottom: max(66px, calc(env(safe-area-inset-bottom) + 46px)); width: calc(100% - 32px); max-width: 480px; padding: 6px; border-radius: 13px; }
       .state { gap: 7px; font-size: 11px; } .state .number { display: none; } .dock-bottom { gap: 10px; padding-left: 7px; padding-right: 3px; }
       .intensity-label { font-size: 8px; } .dock-bottom .icon-button { min-width: 44px; }
-      .footer { left: 22px; right: 22px; bottom: max(21px, env(safe-area-inset-bottom)); } .hint { display: none; } .source { font-size: 8px; }
-      .footer::after { content: "TOQUE PARA PULSAR"; font-family: monospace; font-size: 8px; color: var(--muted); letter-spacing: .07em; }
+      .footer { left: 22px; right: 22px; bottom: max(10px, env(safe-area-inset-bottom)); } .hint { display: none; } .source { font-size: 8px; }
+      .audio-console { width: 100%; gap: 10px; } .audio-console .source { flex: 1; gap: 8px; } .sound-button { padding: 0; width: 44px; } .sound-button span { display: none; } #volume { width: 58px; }
+      .state { gap: 5px; } .state.auto-button { flex: .72; }
       .corner { display: none; }
     }
     @media (max-height: 680px) and (min-width: 641px) { .scene-title { top: 20%; } .presence { top: 66%; } .presence p { display: none; } .dock { bottom: 43px; } .footer { bottom: 12px; } .annotation { top: 40%; } }
@@ -149,6 +159,7 @@
     <div class="presence" aria-live="polite" aria-atomic="true"><div id="state-label" class="presence-label mono">STANDBY</div><p id="state-caption">Silêncio. Potencial infinito.</p></div>
     <section class="dock" aria-label="Controles da experiência">
       <div class="state-buttons" role="group" aria-label="Estado do assistente">
+        <button id="auto" class="state auto-button" aria-label="Reprodução automática" aria-pressed="true" title="Reprodução automática · A"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 7v5h-5M4 17v-5h5m-4-4a8 8 0 0 1 13-3l2 3M4 16l2 3a8 8 0 0 0 13-3"/></svg>Auto</button>
         <button class="state" data-state="standby" aria-pressed="true"><span class="state-symbol idle" aria-hidden="true"></span>Standby<span class="number">01</span></button>
         <button class="state" data-state="listening" aria-pressed="false"><span class="state-symbol listen" aria-hidden="true"></span>Listening<span class="number">02</span></button>
         <button class="state" data-state="speaking" aria-pressed="false"><span class="state-symbol speak" aria-hidden="true"><i></i><i></i><i></i></span>Speaking<span class="number">03</span></button>
@@ -160,7 +171,7 @@
       </div>
     </section>
     <div class="corner left" aria-hidden="true"></div><div class="corner right" aria-hidden="true"></div>
-    <footer class="footer"><div class="source mono"><span class="meter" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span><span id="audio-source">ÁUDIO SIMULADO</span></div><div class="hint mono"><b>ARRASTE</b> para orbitar &nbsp;·&nbsp; <b>CLIQUE</b> para pulsar &nbsp;·&nbsp; <b>1 2 3</b> estados &nbsp;·&nbsp; <b>H</b> cinema</div></footer>
+    <footer class="footer"><div class="audio-console"><div class="source mono"><span class="meter" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span><span id="audio-source">ÁUDIO SIMULADO</span></div><button id="sound" class="icon-button sound-button" aria-label="Ativar som" aria-pressed="false" title="Ativar som · S"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m11 4-6 5H2v6h3l6 5Z"/><path id="sound-waves" d="m16 9 5 6m0-6-5 6"/></svg><span id="sound-label">Ativar som</span></button><label class="sr-only" for="volume">Volume dos efeitos sonoros</label><input id="volume" type="range" min="0" max="100" value="35" title="Volume dos efeitos sonoros" style="--fill:35%"></div><div class="hint mono"><b>A</b> automático &nbsp;·&nbsp; <b>S</b> som &nbsp;·&nbsp; <b>CLIQUE</b> para pulsar &nbsp;·&nbsp; <b>H</b> cinema</div></footer>
   </div>
   <button id="restore" class="icon-button cinema-button" aria-label="Mostrar interface" title="Mostrar interface · H"><svg viewBox="0 0 24 24"><path d="M3 8h5V3m13 5h-5V3M8 21v-5H3m13 5v-5h5"/></svg><span>Mostrar interface</span></button>
   <div id="toast" role="status" aria-live="polite"></div>
@@ -205,6 +216,10 @@
       let dpr = 1, qualityScale = 1, lastTime = performance.now(), fpsTime = lastTime, fpsFrames = 0;
       let measuredFPS = 0, frameNumber = 0, sceneCalls = 0, slowWindows = 0, fastWindows = 0;
       let externalLevel = 0, externalAt = -Infinity;
+      let autoDemo=!reducedMotion.matches,demoStage=0,demoElapsed=0,nextAutoPulse=3,autoYaw=0,autoPitch=0,shuttingDown=false;
+      const demoSequence=[{state:'standby',duration:4},{state:'listening',duration:6},{state:'speaking',duration:8}];
+      let micStream=null,audioContext=null,analyser=null,sourceNode=null,micPending=false,micEpoch=0;
+      let timeSamples=null,frequencySamples=null,audioSource='simulation';
       const frameTimes = [];
       const U = { uTime: { value: 0 }, uEnergy: { value: energy }, uLevel: { value: 0 }, uHeat: { value: heat }, uPulse: { value: 0 }, uDpr: { value: 1 } };
 
@@ -370,15 +385,129 @@
         quad.material=composite;renderer.setRenderTarget(null);renderer.render(postScene,postCamera);
       }
 
+      // Procedural sound design: a living drone, glass-like tones, filtered air and
+      // sub-bass pulses. The graph is created once, only after a user gesture.
+      const sound={enabled:false,volume:.35,ctx:null,input:null,master:null,meter:null,samples:null,drones:[],air:null,airFilter:null,noiseBuffer:null,nextTone:0,sequence:0,lastPulse:-Infinity,suspendTimer:0,serial:0,pending:false,transients:new Set()};
+      function soundAllowed(){return sound.enabled&&!paused&&!document.hidden&&!micPending&&!micStream&&audioSource!=='external'&&!shuttingDown;}
+      function buildSound(){
+        if(sound.ctx)return;
+        const ctx=new AudioContext({latencyHint:'interactive'});sound.ctx=ctx;
+        const input=ctx.createGain(),compressor=ctx.createDynamicsCompressor(),master=ctx.createGain(),meter=ctx.createAnalyser();
+        sound.input=input;sound.master=master;sound.meter=meter;
+        compressor.threshold.value=-18;compressor.knee.value=16;compressor.ratio.value=4;compressor.attack.value=.004;compressor.release.value=.2;
+        master.gain.value=0;meter.fftSize=1024;sound.samples=new Float32Array(meter.fftSize);
+        input.connect(compressor);compressor.connect(master);master.connect(meter);meter.connect(ctx.destination);
+        const reverb=ctx.createConvolver(),wet=ctx.createGain(),impulse=ctx.createBuffer(2,Math.floor(ctx.sampleRate*1.4),ctx.sampleRate);
+        for(let channel=0;channel<2;channel++){const data=impulse.getChannelData(channel);for(let i=0;i<data.length;i++)data[i]=(random()*2-1)*Math.pow(1-i/data.length,3.7)*.28;}
+        reverb.buffer=impulse;wet.gain.value=.19;input.connect(reverb);reverb.connect(wet);wet.connect(compressor);
+        const delay=ctx.createDelay(.5),echo=ctx.createGain();delay.delayTime.value=.23;echo.gain.value=.13;input.connect(delay);delay.connect(echo);echo.connect(compressor);
+        const droneBus=ctx.createGain();droneBus.gain.value=.75;droneBus.connect(input);
+        for(const [ratio,gain,type,detune] of [[1,.11,'sine',-4],[1.5,.055,'sine',3],[2,.024,'triangle',-2],[3,.012,'sine',6]]){
+          const oscillator=ctx.createOscillator(),voice=ctx.createGain();oscillator.type=type;oscillator.frequency.value=55*ratio;oscillator.detune.value=detune;voice.gain.value=gain;
+          oscillator.connect(voice);voice.connect(droneBus);oscillator.start();sound.drones.push({oscillator,voice,ratio,gain});
+        }
+        const breathing=ctx.createOscillator(),breathDepth=ctx.createGain();breathing.frequency.value=.13;breathDepth.gain.value=.10;breathing.connect(breathDepth);breathDepth.connect(droneBus.gain);breathing.start();
+        const noiseBuffer=ctx.createBuffer(1,ctx.sampleRate*2,ctx.sampleRate),noise=noiseBuffer.getChannelData(0);let smooth=0;
+        for(let i=0;i<noise.length;i++){smooth=(smooth+(random()*2-1)*.09)/1.09;noise[i]=smooth*2.5;}sound.noiseBuffer=noiseBuffer;
+        const air=ctx.createBufferSource(),filter=ctx.createBiquadFilter(),airGain=ctx.createGain();air.buffer=noiseBuffer;air.loop=true;filter.type='bandpass';filter.frequency.value=480;filter.Q.value=.7;airGain.gain.value=.015;
+        air.connect(filter);filter.connect(airGain);airGain.connect(input);air.start();sound.air=airGain;sound.airFilter=filter;
+        sound.nextTone=ctx.currentTime+.7;
+      }
+      function tone(frequency,end,duration,amplitude,delay=0,type='sine'){
+        if(!soundAllowed()||sound.ctx?.state!=='running')return;
+        const ctx=sound.ctx,at=ctx.currentTime+delay,oscillator=ctx.createOscillator(),gain=ctx.createGain();
+        oscillator.type=type;oscillator.frequency.setValueAtTime(frequency,at);oscillator.frequency.exponentialRampToValueAtTime(Math.max(20,end),at+duration);
+        gain.gain.setValueAtTime(.00001,at);gain.gain.exponentialRampToValueAtTime(Math.max(.00002,amplitude),at+.012);gain.gain.exponentialRampToValueAtTime(.00001,at+duration);
+        oscillator.connect(gain);gain.connect(sound.input);sound.transients.add(oscillator);
+        oscillator.onended=()=>{oscillator.disconnect();gain.disconnect();sound.transients.delete(oscillator);};oscillator.start(at);oscillator.stop(at+duration+.04);
+      }
+      function soundSweep(){
+        if(!soundAllowed()||sound.ctx?.state!=='running')return;
+        const ctx=sound.ctx,at=ctx.currentTime,source=ctx.createBufferSource(),filter=ctx.createBiquadFilter(),gain=ctx.createGain();source.buffer=sound.noiseBuffer;filter.type='bandpass';filter.Q.value=3;
+        filter.frequency.setValueAtTime(2400,at);filter.frequency.exponentialRampToValueAtTime(160,at+.62);gain.gain.setValueAtTime(.00001,at);gain.gain.exponentialRampToValueAtTime(.085,at+.035);gain.gain.exponentialRampToValueAtTime(.00001,at+.7);
+        source.connect(filter);filter.connect(gain);gain.connect(sound.input);sound.transients.add(source);source.onended=()=>{source.disconnect();filter.disconnect();gain.disconnect();sound.transients.delete(source);};source.start(at);source.stop(at+.74);
+      }
+      function soundTransition(){
+        if(!soundAllowed()||sound.ctx?.state!=='running')return;
+        const root=state==='standby'?55:state==='listening'?65.406:73.416;
+        sound.drones.forEach(({oscillator,ratio})=>oscillator.frequency.setTargetAtTime(root*ratio,sound.ctx.currentTime,.65));
+        tone(root*8,root*8,.48,.08);tone(root*12,root*12,.55,.045,.10);tone(root*16,root*16,.8,.028,.20);
+        soundSweep();sound.nextTone=sound.ctx.currentTime+1;sound.sequence=0;
+      }
+      function soundPulse(){
+        if(!soundAllowed()||sound.ctx?.state!=='running'||sound.ctx.currentTime-sound.lastPulse<.28)return;
+        sound.lastPulse=sound.ctx.currentTime;tone(145,42,.85,.32);tone(590,110,.46,.055,.02);soundSweep();
+      }
+      function updateSound(){
+        if(!soundAllowed()||sound.ctx?.state!=='running')return;
+        const now=sound.ctx.currentTime;
+        sound.air.gain.setTargetAtTime(.012+energy*.016,now,.18);sound.airFilter.frequency.setTargetAtTime(300+energy*750+level*300,now,.2);
+        if(now>=sound.nextTone){
+          const notes=state==='standby'?[440,660,880]:state==='listening'?[523.25,783.99,1046.5,783.99]:[293.66,440,587.33,880,659.25];
+          const frequency=notes[sound.sequence++%notes.length];tone(frequency,frequency*(state==='speaking'?1.002:1),state==='standby'?.9:.42,state==='standby'?.016:state==='listening'?.038:.048);
+          sound.nextTone=now+(state==='standby'?3.6:state==='listening'?1.1:.64);
+        }
+      }
+      function soundMetrics(){
+        let sum=0,peak=0;
+        if(sound.ctx?.state==='running'&&sound.meter){sound.meter.getFloatTimeDomainData(sound.samples);for(const value of sound.samples){sum+=value*value;peak=Math.max(peak,Math.abs(value));}}
+        return {enabled:sound.enabled,volume:sound.volume,contextState:sound.ctx?.state||'not-started',outputLevel:sound.samples?Math.sqrt(sum/sound.samples.length):0,peak};
+      }
+      function updateSoundUI(){
+        const active=soundAllowed();$('sound').setAttribute('aria-pressed',String(sound.enabled));$('sound').setAttribute('aria-label',sound.enabled?'Desligar som':'Ativar som');
+        $('sound-label').textContent=sound.enabled?(active?'Som ativo':'Som pausado'):'Ativar som';
+        $('sound').title=(sound.enabled?(active?'Desligar som':'Som pausado durante pausa, captura ou áudio externo'):'Ativar som')+' · S';
+        $('sound-waves').setAttribute('d',active?'M15 8a6 6 0 0 1 0 8m3-11a10 10 0 0 1 0 14':'m16 9 5 6m0-6-5 6');
+      }
+      async function syncSound(){
+        const serial=++sound.serial;clearTimeout(sound.suspendTimer);updateSoundUI();
+        if(!sound.ctx||sound.ctx.state==='closed')return;
+        if(soundAllowed()){
+          try{await sound.ctx.resume();if(serial!==sound.serial||!soundAllowed())return;sound.master.gain.cancelScheduledValues(sound.ctx.currentTime);sound.master.gain.setTargetAtTime(sound.volume*.72,sound.ctx.currentTime,.045);const root=state==='standby'?55:state==='listening'?65.406:73.416;sound.drones.forEach(({oscillator,ratio})=>oscillator.frequency.setTargetAtTime(root*ratio,sound.ctx.currentTime,.65));}
+          catch{sound.enabled=false;updateSoundUI();}
+        }else{
+          sound.master.gain.cancelScheduledValues(sound.ctx.currentTime);sound.master.gain.setTargetAtTime(0,sound.ctx.currentTime,.015);
+          sound.suspendTimer=setTimeout(()=>{if(serial===sound.serial&&sound.ctx.state==='running')sound.ctx.suspend().catch(()=>{});},100);
+        }
+      }
+      async function toggleSound(){
+        if(sound.pending||shuttingDown)return;
+        sound.pending=true;$('sound').disabled=true;
+        try{if(!sound.enabled){buildSound();sound.enabled=true;await syncSound();soundTransition();}else{sound.enabled=false;await syncSound();}}
+        catch{sound.enabled=false;await syncSound();toast('Não foi possível iniciar o som. A experiência visual continua ativa.');}
+        finally{sound.pending=false;$('sound').disabled=false;updateSoundUI();}
+      }
+      function setVolume(value){
+        const next=Number(value);if(!Number.isFinite(next))return;
+        sound.volume=clamp(next,0,1);$('volume').value=Math.round(sound.volume*100);$('volume').style.setProperty('--fill',Math.round(sound.volume*100)+'%');$('volume').setAttribute('aria-valuetext',Math.round(sound.volume*100)+'%');
+        if(sound.ctx?.state==='running'&&soundAllowed()){sound.master.gain.cancelScheduledValues(sound.ctx.currentTime);sound.master.gain.setTargetAtTime(sound.volume*.72,sound.ctx.currentTime,.025);}
+      }
+      function setAuto(value){
+        const enabled=Boolean(value);
+        if(!enabled&&autoDemo){yaw+=autoYaw;targetYaw+=autoYaw;pitch=clamp(pitch+autoPitch,-1,1);targetPitch=clamp(targetPitch+autoPitch,-1,1);autoYaw=autoPitch=0;}
+        autoDemo=enabled;$('auto').setAttribute('aria-pressed',String(enabled));
+        if(enabled){demoStage=0;demoElapsed=0;nextAutoPulse=time+3;setState('standby',{automatic:true});}
+        $('auto').style.setProperty('--progress','0');needsRender=true;
+      }
+      function updateDemo(dt){
+        if(!autoDemo||paused)return;
+        demoElapsed+=dt;
+        if(demoElapsed>=demoSequence[demoStage].duration){demoElapsed-=demoSequence[demoStage].duration;demoStage=(demoStage+1)%demoSequence.length;setState(demoSequence[demoStage].state,{automatic:true});nextAutoPulse=time+2.6;}
+        if(time>=nextAutoPulse){pulse=Math.max(pulse,state==='speaking'?.72:.35);soundPulse();nextAutoPulse=time+(state==='speaking'?2.7:4.2);}
+        if(frameNumber%6===0)$('auto').style.setProperty('--progress',String(demoElapsed/demoSequence[demoStage].duration));
+      }
+
       let toastTimer;
       function toast(message) { clearTimeout(toastTimer);$('toast').textContent=message;$('toast').classList.add('visible');toastTimer=setTimeout(()=>$('toast').classList.remove('visible'),3200); }
-      function setState(next) {
+      function setState(next,{automatic=false}={}) {
         if(!Object.hasOwn(states,next))return false;
+        if(!automatic)setAuto(false);
+        const changed=state!==next;
         state=next;document.body.dataset.state=state;
         document.querySelectorAll('button[data-state]').forEach(button=>button.setAttribute('aria-pressed',String(button.dataset.state===state)));
         $('state-label').textContent=states[state].label;$('state-caption').textContent=states[state].caption;
         $('state-label').style.color=state==='listening'?'#82efff':state==='speaking'?'#ffa76f':'#ff9257';
-        pulse=paused?0:.7;needsRender=true;return true;
+        pulse=paused?0:.7;if(changed)soundTransition();needsRender=true;return true;
       }
       function setIntensity(value) {
         const next=Number(value);if(!Number.isFinite(next))return;
@@ -389,6 +518,7 @@
         $('pause-icon').innerHTML=paused?'<path d="m8 4 12 8-12 8Z"/>':'<path d="M8 5v14M16 5v14"/>';
         composite.uniforms.uMotion.value=paused?0:1;lastTime=performance.now();needsRender=true;
         if(paused)$('fps').textContent='PAUSADO';
+        syncSound();
       }
       function togglePause() { paused=!paused;updatePause(); }
       function setCinema(value) {
@@ -401,16 +531,15 @@
       }
       document.querySelectorAll('button[data-state]').forEach(button=>button.onclick=()=>setState(button.dataset.state));
       $('intensity').oninput=event=>setIntensity(Number(event.target.value)/100);
+      $('volume').oninput=event=>setVolume(Number(event.target.value)/100);$('sound').onclick=toggleSound;$('auto').onclick=()=>setAuto(!autoDemo);
       $('pause').onclick=togglePause;$('cinema').onclick=()=>setCinema(true);$('restore').onclick=()=>setCinema(false);
       $('transparent').onclick=()=>{setTransparent(!transparent);toast(transparent?'Fundo transparente ativo. Use H para capturar apenas o holograma.':'Fundo OLED ativo.');};
-      setIntensity(intensity);updatePause();
-      reducedMotion.addEventListener('change',event=>{if(event.matches){paused=true;updatePause();}});
+      setIntensity(intensity);setVolume(sound.volume);$('auto').setAttribute('aria-pressed',String(autoDemo));updatePause();
+      reducedMotion.addEventListener('change',event=>{if(event.matches){paused=true;setAuto(false);updatePause();}});
 
       // Only an explicit click requests a microphone. Samples stay in this browser.
-      let micStream=null,audioContext=null,analyser=null,sourceNode=null,micPending=false,micEpoch=0;
-      let timeSamples=null,frequencySamples=null,audioSource='simulation';
       function sourceLabel(kind) {
-        audioSource=kind;$('audio-source').textContent=kind==='microphone'?'MICROFONE ATIVO':kind==='external'?'ÁUDIO DO ASSISTENTE':'ÁUDIO SIMULADO';
+        audioSource=kind;$('audio-source').textContent=kind==='microphone'?'MICROFONE ATIVO':kind==='external'?'ÁUDIO DO ASSISTENTE':kind==='synthesis'?'ÁUDIO SINTETIZADO':'ÁUDIO SIMULADO';syncSound();
       }
       async function stopMic() {
         micEpoch++;
@@ -426,6 +555,7 @@
         if(micStream){await stopMic();toast('Microfone desligado. Áudio simulado ativo.');return;}
         if(!navigator.mediaDevices?.getUserMedia){toast('Microfone indisponível neste contexto. A simulação continua funcionando.');return;}
         micPending=true;$('mic').disabled=true;$('mic').setAttribute('aria-busy','true');
+        syncSound();
         const epoch=++micEpoch;let candidate=null,pendingContext=null;
         try {
           pendingContext=new AudioContext();await pendingContext.resume();
@@ -444,25 +574,26 @@
           micStream=null;audioContext=null;analyser=null;sourceNode=null;sourceLabel('simulation');
           const message=error.name==='NotAllowedError'?'Microfone não autorizado. A simulação continua ativa.':error.name==='NotFoundError'?'Nenhum microfone encontrado. A simulação continua ativa.':'Não foi possível abrir o microfone. A simulação continua ativa.';
           toast(message);
-        } finally {micPending=false;$('mic').disabled=false;$('mic').removeAttribute('aria-busy');}
+        } finally {micPending=false;$('mic').disabled=false;$('mic').removeAttribute('aria-busy');syncSound();}
       }
       $('mic').onclick=toggleMic;
       function readLevel(now) {
         if(now-externalAt<700){if(audioSource!=='external')sourceLabel('external');return externalLevel;}
         if(analyser){if(audioSource!=='microphone')sourceLabel('microphone');analyser.getByteTimeDomainData(timeSamples);analyser.getByteFrequencyData(frequencySamples);let sum=0;for(let i=0;i<timeSamples.length;i++){const v=(timeSamples[i]-128)/128;sum+=v*v;}return clamp(Math.sqrt(sum/timeSamples.length)*5.2,0,1);}
-        if(audioSource!=='simulation')sourceLabel('simulation');
+        const kind=sound.enabled?'synthesis':'simulation';if(audioSource!==kind)sourceLabel(kind);
         const syllable=Math.pow(.5+.5*Math.sin(time*7.3+Math.sin(time*2.17)),2)*(.5+.5*Math.sin(time*3.1+.7));
-        return state==='standby'?.025+.018*Math.sin(time*.65):state==='listening'?.08+syllable*.47:.24+syllable*.7;
+        const simulated=state==='standby'?.025+.018*Math.sin(time*.65):state==='listening'?.08+syllable*.47:.24+syllable*.7;
+        return Math.max(simulated,Math.min(1,soundMetrics().outputLevel*7));
       }
 
       let pointer=null;
-      canvas.addEventListener('pointerdown',event=>{if(event.button!==0)return;pointer={id:event.pointerId,x:event.clientX,y:event.clientY,startX:event.clientX,startY:event.clientY,moved:false};canvas.setPointerCapture(event.pointerId);});
+      canvas.addEventListener('pointerdown',event=>{if(event.button!==0)return;setAuto(false);pointer={id:event.pointerId,x:event.clientX,y:event.clientY,startX:event.clientX,startY:event.clientY,moved:false};canvas.setPointerCapture(event.pointerId);});
       canvas.addEventListener('pointermove',event=>{
         if(!pointer||event.pointerId!==pointer.id)return;
         const dx=event.clientX-pointer.x,dy=event.clientY-pointer.y;targetYaw+=dx*.006;targetPitch=clamp(targetPitch+dy*.004,-1,1);pointer.x=event.clientX;pointer.y=event.clientY;
         if(Math.hypot(event.clientX-pointer.startX,event.clientY-pointer.startY)>5)pointer.moved=true;needsRender=true;
       });
-      function releasePointer(event) {if(!pointer||event.pointerId!==pointer.id)return;if(!pointer.moved&&event.type==='pointerup'){targetYaw+=Math.PI*.22;pulse=paused?0:1;needsRender=true;}if(canvas.hasPointerCapture(event.pointerId))canvas.releasePointerCapture(event.pointerId);pointer=null;}
+      function releasePointer(event) {if(!pointer||event.pointerId!==pointer.id)return;if(!pointer.moved&&event.type==='pointerup'){targetYaw+=Math.PI*.22;pulse=paused?0:1;soundPulse();needsRender=true;}if(canvas.hasPointerCapture(event.pointerId))canvas.releasePointerCapture(event.pointerId);pointer=null;}
       canvas.addEventListener('pointerup',releasePointer);canvas.addEventListener('pointercancel',releasePointer);
       addEventListener('keydown',event=>{
         if(event.ctrlKey||event.metaKey||event.altKey||event.target.matches('input,textarea,select,[contenteditable="true"]'))return;
@@ -471,23 +602,27 @@
         else if(key==='h')setCinema(!cinema);
         else if(key==='t')setTransparent(!transparent);
         else if(key==='m')toggleMic();
+        else if(key==='s'&&!event.repeat)toggleSound();
+        else if(key==='a'&&!event.repeat)setAuto(!autoDemo);
         else if(key==='escape'&&cinema)setCinema(false);
         else if(key===' '&&!event.target.closest('button')){event.preventDefault();togglePause();}
         else if(event.target===canvas){
-          if(['arrowleft','arrowright','arrowup','arrowdown','enter'].includes(key))event.preventDefault();
-          if(key==='arrowleft')targetYaw-=.2;if(key==='arrowright')targetYaw+=.2;if(key==='arrowup')targetPitch=clamp(targetPitch-.15,-1,1);if(key==='arrowdown')targetPitch=clamp(targetPitch+.15,-1,1);if(key==='enter'){pulse=paused?0:1;targetYaw+=.5;}needsRender=true;
+          if(['arrowleft','arrowright','arrowup','arrowdown','enter'].includes(key)){event.preventDefault();setAuto(false);}
+          if(key==='arrowleft')targetYaw-=.2;if(key==='arrowright')targetYaw+=.2;if(key==='arrowup')targetPitch=clamp(targetPitch-.15,-1,1);if(key==='arrowdown')targetPitch=clamp(targetPitch+.15,-1,1);if(key==='enter'){pulse=paused?0:1;targetYaw+=.5;soundPulse();}needsRender=true;
         }
       });
-      document.addEventListener('visibilitychange',()=>{lastTime=performance.now();fpsTime=lastTime;fpsFrames=0;needsRender=true;});
+      document.addEventListener('visibilitychange',()=>{lastTime=performance.now();fpsTime=lastTime;fpsFrames=0;needsRender=true;syncSound();});
       canvas.addEventListener('webglcontextlost',event=>{event.preventDefault();paused=true;updatePause();fail('O contexto gráfico foi interrompido. Recarregue a experiência para restaurá-lo.');});
 
       const meterBars=[...document.querySelectorAll('.meter i')];
       function update(dt,now) {
+        updateDemo(dt);
         const blend=1-Math.exp(-dt*5),rotationBlend=paused?1:1-Math.exp(-dt*7);
         if(!paused){level+=(readLevel(now)-level)*(1-Math.exp(-dt*12));energy+=(states[state].activity*(.2+intensity*.9)+level*intensity*.52-energy)*blend;heat+=(states[state].heat-heat)*blend;time+=dt;motion+=dt*states[state].speed*(.4+intensity);pulse*=Math.exp(-dt*2.8);}
         else {energy=states[state].activity*(.2+intensity*.9);heat=states[state].heat;pulse=0;}
         yaw+=(targetYaw-yaw)*rotationBlend;pitch+=(targetPitch-pitch)*rotationBlend;
-        world.rotation.set(pitch,yaw,0);
+        autoYaw=autoDemo?Math.sin(time*.14)*.22+motion*.07:0;autoPitch=autoDemo?Math.sin(time*.19)*.075:0;
+        world.rotation.set(pitch+autoPitch,yaw+autoYaw,0);
         orb.rotation.set(Math.sin(time*.1)*.14,motion*.16,Math.sin(time*.14)*.1);
         const scale=1+Math.sin(time*.8)*.018+level*intensity*.045;orb.scale.setScalar(scale);
         orbits.forEach(({group,index,z,x})=>{group.rotation.z=z+motion*(index%2?-.19:.17);group.rotation.x=x+Math.sin(time*.17+index)*.055;group.scale.setScalar(1+level*.025+pulse*.018);});
@@ -496,6 +631,7 @@
         particles.rotation.y=motion*.025;stars.rotation.z=time*.0008;
         halos.forEach((halo,i)=>{halo.material.opacity=.24+energy*.13+Math.sin(time*.5+i)*.03;});
         U.uTime.value=time;U.uEnergy.value=energy;U.uLevel.value=level;U.uHeat.value=heat;U.uPulse.value=pulse;
+        if(!paused)updateSound();
         if(frameNumber%4===0)meterBars.forEach((bar,i)=>{const value=analyser&&frequencySamples?frequencySamples[Math.floor((i+1)*frequencySamples.length/24)]/255:level*(.35+.65*(.5+.5*Math.sin(time*5+i*.9)));bar.style.transform=`scaleY(${Math.max(.12,value)})`;});
       }
       function tick(now) {
@@ -515,13 +651,15 @@
       // Optional host hook: call setState + setAudioLevel with a normalized 0..1 RMS.
       // It expires back to mic/demo if the assistant stops supplying samples.
       window.jarvisOverlay=Object.freeze({
-        setState,setIntensity,setCinema,setTransparent,
-        setAudioLevel(value){if(typeof value==='number'&&Number.isFinite(value)){externalLevel=clamp(value,0,1);externalAt=performance.now();needsRender=true;}},
+        setState,setIntensity,setCinema,setTransparent,setAuto,setVolume,
+        setAudioLevel(value){if(typeof value==='number'&&Number.isFinite(value)){if(autoDemo)setAuto(false);externalLevel=clamp(value,0,1);externalAt=performance.now();needsRender=true;}},
         pause(value=true){paused=Boolean(value);updatePause();},
-        getMetrics(){const frames=[...frameTimes].sort((a,b)=>a-b);return {state,paused,intensity,source:audioSource,level,energy,heat,time,rotation:{yaw,pitch},fps:measuredFPS,medianFrameMs:frames.length?frames[Math.floor(frames.length/2)]:null,p95FrameMs:frames.length?frames[Math.floor(frames.length*.95)]:null,pixelRatio:dpr,drawCalls:sceneCalls,particles:particleCount+skinCount+950,frames:frameNumber,transparent,cinema,microphoneActive:Boolean(micStream?.active)};}
+        getMetrics(){const frames=[...frameTimes].sort((a,b)=>a-b);return {state,paused,intensity,autoDemo,sound:soundMetrics(),source:audioSource,level,energy,heat,time,rotation:{yaw:yaw+autoYaw,pitch:pitch+autoPitch},fps:measuredFPS,medianFrameMs:frames.length?frames[Math.floor(frames.length/2)]:null,p95FrameMs:frames.length?frames[Math.floor(frames.length*.95)]:null,pixelRatio:dpr,drawCalls:sceneCalls,particles:particleCount+skinCount+950,frames:frameNumber,transparent,cinema,microphoneActive:Boolean(micStream?.active)};}
       });
       const params=new URLSearchParams(location.search);
       if(params.has('state'))setState(params.get('state'));
+      if(params.get('auto')==='0')setAuto(false);else if(params.get('auto')==='1'&&!reducedMotion.matches)setAuto(true);
+      if(params.has('volume'))setVolume(Number(params.get('volume'))/100);
       if(params.has('intensity'))setIntensity(Number(params.get('intensity'))/100);
       if(params.get('transparent')==='1')setTransparent(true);
       if(params.get('cinema')==='1')setCinema(true);
@@ -530,7 +668,7 @@
       render();$('loading').hidden=true;document.body.dataset.ready='true';
       if(reducedMotion.matches)toast('Movimento pausado conforme sua preferência. Ative no botão de reprodução.');
       requestAnimationFrame(tick);
-      addEventListener('pagehide',()=>{stopMic();},{once:true});
+      addEventListener('pagehide',()=>{shuttingDown=true;clearTimeout(sound.suspendTimer);sound.serial++;stopMic();if(sound.ctx&&sound.ctx.state!=='closed')sound.ctx.close().catch(()=>{});},{once:true});
     }
   </script>
 </body>
