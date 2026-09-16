@@ -50,6 +50,11 @@ impl Recorder {
     fn event(&mut self, what: &str, detail: impl std::fmt::Display) {
         let ms = self.started.elapsed().as_millis();
         let _ = writeln!(self.events, "{ms:>8}ms  {what:<14} {detail}");
+        // Descarrega a cada evento: se o processo morrer sem Ctrl+C (pane
+        // fechado, kill), o log e os cabeçalhos WAV ainda ficam válidos.
+        let _ = self.events.flush();
+        let _ = self.playback.flush();
+        let _ = self.mic.flush();
     }
 
     fn playback(&mut self, samples: &[i16]) {

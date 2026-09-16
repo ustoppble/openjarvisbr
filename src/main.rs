@@ -40,9 +40,52 @@ struct Cli {
     debug: bool,
 }
 
+/// Garante uma única instância por usuário: um segundo `jarvis` ouviria o
+/// mesmo microfone e falaria por cima do primeiro (duas vozes, cortes).
+/// O handle do arquivo precisa viver até o fim do processo — o lock cai
+/// junto com ele, inclusive em kill/pane fechado.
+fn acquire_single_instance_lock() -> Result<std::fs::File, String> {
+    use fs4::fs_std::FileExt;
+    use std::io::{Read, Seek, Write};
+
+    let dir = std::env::temp_dir().join("openjarvisbr");
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let path = dir.join("jarvis.lock");
+    let mut file = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(&path)
+        .map_err(|e| e.to_string())?;
+    if file.try_lock_exclusive().is_err() {
+        let mut other = String::new();
+        let _ = file.read_to_string(&mut other);
+        let other = other.trim();
+        return Err(if other.is_empty() {
+            "já existe um Jarvis rodando. Feche o outro antes de abrir este.".to_string()
+        } else {
+            format!("já existe um Jarvis rodando (pid {other}). Feche o outro antes de abrir este.")
+        });
+    }
+    let _ = file.set_len(0);
+    let _ = file.seek(std::io::SeekFrom::Start(0));
+    let _ = write!(file, "{}", std::process::id());
+    let _ = file.flush();
+    Ok(file)
+}
+
 fn main() {
     let cli = Cli::parse();
     init_tracing(cli.debug);
+
+    let _instance_lock = match acquire_single_instance_lock() {
+        Ok(lock) => lock,
+        Err(msg) => {
+            eprintln!("{msg}");
+            std::process::exit(6);
+        }
+    };
 
     let api_key = match config::load_api_key() {
         Ok(key) => key,
