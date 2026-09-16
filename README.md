@@ -54,11 +54,14 @@ Flags: `--voice`, `--device-in`, `--device-out`, `--debug`.
 Antes de testar de verdade, siga o roteiro leigo em [`docs/testes/v1.md`](docs/testes/v1.md) —
 ele cobre desde criar a chave até conversa de 2 minutos, interrupção, mudo e reconexão de rede.
 
-## Rodar o desktop (Tauri)
+## App de desktop
 
-`apps/desktop` é o app Mac/Windows: fica na bandeja, sem terminal. Ainda sem overlay nem
-janela de configurações de verdade (JRV-32 e JRV-33) — nesta entrega só sobe o motor e
-mostra o estado na bandeja.
+`apps/desktop` é o app Mac/Windows: fica na bandeja, sempre conectado e ouvindo. Uma
+janela flutuante estilo Siri surge no topo da tela quando você fala e some sozinha no
+silêncio; uma janela de Configurações edita chave, voz, dispositivos, efeito, barge-in
+e system prompt.
+
+### Rodar em modo desenvolvimento
 
 ```sh
 . "$HOME/.cargo/env"
@@ -69,10 +72,35 @@ npm run tauri dev
 
 - Com a chave configurada (`~/.config/jarvis/config.toml` ou `GEMINI_API_KEY`): conecta
   direto e o ícone da bandeja mostra o estado (conectando, ouvindo, falando, mudo, erro).
-- Sem chave: abre uma janela vazia dizendo pra configurar `~/.config/jarvis/config.toml` e
-  o ícone fica em erro.
+- Sem chave: abre a janela de Configurações com um aviso pra colar a chave, e o ícone
+  fica em erro.
+- Overlay: aparece no topo central da tela ao falar (sua fala e a resposta), some
+  sozinho ~4s depois do silêncio, nunca rouba foco.
 - Atalho global `Cmd+Shift+J` (`Ctrl+Shift+J` no Windows/Linux) muta e desmuta.
 - Menu do ícone: Mutar/Desmutar, Reconectar, Configurações, Sair.
+- Abrir o app uma segunda vez ativa a instância já aberta em vez de duplicar.
+
+Antes de considerar uma mudança pronta, siga o roteiro leigo em
+[`docs/testes/v2.md`](docs/testes/v2.md).
+
+### Gerar o build (`.app`/`.dmg` no Mac, instalador no Windows)
+
+```sh
+. "$HOME/.cargo/env"
+cd apps/desktop
+npm install
+npm run tauri build
+```
+
+- **Mac:** gera `OpenJarvisBR.app` e `OpenJarvisBR_<versão>_aarch64.dmg` em
+  `target/release/bundle/macos/` e `target/release/bundle/dmg/` (raiz do workspace
+  Cargo — o `.dmg` fica pronto pra abrir e arrastar pra `Aplicativos`).
+- **Windows:** ver [`docs/build-windows.md`](docs/build-windows.md) — pré-requisitos
+  (Rust, Node, WebView2) e o que testar a mais na primeira rodada.
+
+Não há instalador assinado/notarizado nesta versão (fora de escopo do v2) — no Mac, o
+Gatekeeper pode pedir para autorizar o app em Ajustes › Privacidade e Segurança na
+primeira abertura.
 
 ## Stack
 
