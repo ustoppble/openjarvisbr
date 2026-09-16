@@ -191,6 +191,15 @@ impl Player {
     }
 
     /// Descarta toda amostra ainda não tocada (interrupção).
+    /// `true` enquanto ainda há amostras na fila esperando pra tocar.
+    pub fn is_playing(&self) -> bool {
+        !self
+            .queue
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .is_empty()
+    }
+
     pub fn flush(&self) {
         self.queue
             .lock()

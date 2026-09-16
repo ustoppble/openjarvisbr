@@ -25,6 +25,12 @@ struct Cli {
     #[arg(long)]
     device_out: Option<String>,
 
+    /// Mantém o microfone aberto enquanto o Jarvis fala, permitindo
+    /// interromper por voz. Use só com fone: com caixa de som o mic capta
+    /// a própria voz dele e a conversa vira eco.
+    #[arg(long)]
+    barge_in: bool,
+
     /// Ativa logs em nível debug
     #[arg(long)]
     debug: bool,
@@ -62,6 +68,7 @@ fn main() {
         voice: cli.voice,
         device_in: cli.device_in,
         device_out: cli.device_out,
+        barge_in: cli.barge_in,
     });
     let exit_code = runtime.block_on(app.run());
     std::process::exit(exit_code);

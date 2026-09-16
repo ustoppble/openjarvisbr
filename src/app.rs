@@ -38,6 +38,9 @@ pub struct AppConfig {
     pub voice: String,
     pub device_in: Option<String>,
     pub device_out: Option<String>,
+    /// Mic aberto enquanto o modelo fala (interrupção por voz). Desligado por
+    /// padrão para evitar eco com caixa de som.
+    pub barge_in: bool,
 }
 
 /// Aplicação principal: mantém o estado atual da sessão.
@@ -95,6 +98,9 @@ impl App {
 
         self.state = State::Listening;
         print_line("ouvindo — fale quando quiser (M muta o microfone, Ctrl+C encerra)");
+        if !self.config.barge_in {
+            print_line("modo caixa de som: espere o Jarvis terminar pra falar (--barge-in libera interrupção por voz, use com fone)".dimmed());
+        }
 
         let mut muted = false;
         let mut transcript = Transcript::default();
@@ -103,7 +109,11 @@ impl App {
                 chunk = audio_rx.recv() => {
                     match chunk {
                         Some(samples) => {
-                            if !muted {
+                            // Half-duplex: sem fone, o mic capta a voz do
+                            // próprio Jarvis e o servidor a trata como fala
+                            // do usuário. Só enviamos enquanto ele está calado.
+                            let gated = !self.config.barge_in && player.is_playing();
+                            if !muted && !gated {
                                 session.send_audio(&samples);
                             }
                         }
