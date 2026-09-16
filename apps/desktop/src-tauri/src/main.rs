@@ -31,7 +31,7 @@ use commands::permissions::{
     request_permissions, reveal_app,
 };
 use commands::tools::{
-    add_mcp_server, confirm_tool, emit_tool_mock, get_tools_settings, open_tools_link,
+    add_mcp_server, confirm_tool, connect_mcp_server, emit_tool_mock, get_tools_settings, open_tools_link,
     remove_mcp_server, set_full_access, set_overlay_tool_strip, test_mcp_server,
 };
 use errors::{handle_engine_error, take_pending_error};
@@ -446,6 +446,24 @@ fn build_engine_config(api_key: String, greeting: Option<String>) -> EngineConfi
     }
 }
 
+/// Antes de subir o motor, relê o Overclock/OverClick em disco para os
+/// servidores `overclock`/`overclick` do config (JRV-68): porta ou token
+/// novos vão para o config e o Keychain. Sem Overclock, nada muda.
+async fn refresh_discovered_mcp_servers() {
+    let servers = load_settings().mcp_servers;
+    let updated = tauri::async_runtime::spawn_blocking(move || {
+        openjarvisbr_core::mcp::discovery::refresh(&servers)
+    })
+    .await
+    .unwrap_or_default();
+    for server in updated {
+        match tools_config::upsert_server(&server) {
+            Ok(()) => tracing::info!(server = %server.name, "servidor MCP atualizado pela descoberta"),
+            Err(err) => tracing::warn!(server = %server.name, error = %err, "não foi possível gravar o servidor descoberto"),
+        }
+    }
+}
+
 /// Derruba o motor em execução (se houver) e sobe de novo com o config.toml
 /// atual — chamado pela janela de configurações depois de salvar voz,
 /// dispositivos, barge-in ou system prompt, que só entram em vigor no
@@ -489,6 +507,7 @@ fn spawn_startup_with_greeting(app: AppHandle, greeting: Option<String>) {
             }
         };
 
+        refresh_discovered_mcp_servers().await;
         let config = build_engine_config(api_key, greeting);
 
         match Engine::start(config).await {
@@ -573,6 +592,7 @@ fn main() {
             remove_always_allow,
             add_mcp_server,
             remove_mcp_server,
+            connect_mcp_server,
             test_mcp_server,
             open_tools_link,
             get_permissions,

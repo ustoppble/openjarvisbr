@@ -106,6 +106,8 @@ pub struct McpServerInfo {
     pub bearer_env: Option<String>,
     pub bearer_env_present: bool,
     pub token_keychain: bool,
+    /// Servidor com descoberta automática (`overclock` / `overclick`).
+    pub discovery: Option<&'static str>,
 }
 
 pub fn mcp_servers() -> Vec<McpServerInfo> {
@@ -120,6 +122,7 @@ pub fn mcp_servers() -> Vec<McpServerInfo> {
             transport: if server.url.is_some() { "http" } else { "stdio" },
             bearer_env_present: server.bearer_env.as_deref().is_some_and(env_present),
             token_keychain: server.token_keychain.is_some(),
+            discovery: openjarvisbr_core::mcp::discovery::Kind::of(&server).map(|kind| kind.as_str()),
             bearer_env: server.bearer_env,
             name: server.name,
         })
@@ -230,9 +233,9 @@ pub fn remove_server(name: &str) -> Result<Option<String>, String> {
     Ok(keychain)
 }
 
-/// Esconde tudo que pode carregar credencial numa URL: usuário/senha antes
-/// do `@`, valores da query string e fragmento. Placeholders `${VAR}` ficam
-/// (são nomes de env, não valores).
+/// Esconde tudo que pode carregar credencial ou endereço numa URL:
+/// usuário/senha antes do `@`, porta numérica, valores da query string e
+/// fragmento. Placeholders `${VAR}` ficam (são nomes de env, não valores).
 pub fn mask_url(url: &str) -> String {
     let (base, fragment) = match url.split_once('#') {
         Some((base, _)) => (base, "#***"),
@@ -256,10 +259,17 @@ pub fn mask_url(url: &str) -> String {
         Some((scheme, rest)) => {
             let authority_end = rest.find('/').unwrap_or(rest.len());
             let (authority, path) = rest.split_at(authority_end);
-            match authority.rsplit_once('@') {
-                Some((_, host)) => format!("{scheme}://***@{host}{path}"),
-                None => base.to_string(),
-            }
+            let (userinfo, host) = match authority.rsplit_once('@') {
+                Some((_, host)) => ("***@", host),
+                None => ("", authority),
+            };
+            let host = match host.rsplit_once(':') {
+                Some((name, port)) if !port.is_empty() && port.chars().all(|c| c.is_ascii_digit()) => {
+                    format!("{name}:***")
+                }
+                _ => host.to_string(),
+            };
+            format!("{scheme}://{userinfo}{host}{path}")
         }
         None => base.to_string(),
     };
@@ -276,6 +286,10 @@ mod tests {
         assert_eq!(
             mask_url("https://user:secret@cloud.example/mcp?token=abc&x=1#frag"),
             "https://***@cloud.example/mcp?token=***&x=***#***"
+        );
+        assert_eq!(
+            mask_url("http://127.0.0.1:4321/mcp/claude?toolProfile=full"),
+            "http://127.0.0.1:***/mcp/claude?toolProfile=***"
         );
         assert_eq!(
             mask_url("http://127.0.0.1:${OVERCLOCK_MCP_PORT}/mcp"),

@@ -130,13 +130,13 @@ interface McpServerInfo {
   bearer_env: string | null;
   bearer_env_present: boolean;
   token_keychain: boolean;
+  discovery: "overclock" | "overclick" | null;
 }
 
 interface ToolsSettingsPayload {
   enabled: boolean;
   full_access: boolean;
   mcp_servers: McpServerInfo[];
-  overclock_env_present: boolean;
 }
 
 interface McpTestResult {
@@ -162,7 +162,8 @@ const ACCESSIBILITY_POLL_MS = 3000;
 let accessibilityTimer: number | null = null;
 let appPath = "";
 let iconDataUrl = "";
-let overclockEnvPresent = false;
+// Resultado de "Conectar" por servidor, mostrado no próximo render da lista.
+const pendingMcpStatus = new Map<string, McpTestResult>();
 
 function setBadge(el: HTMLElement, text: string, tone: string) {
   el.textContent = text;
@@ -270,10 +271,16 @@ for (const [id, pane] of [
 }
 
 function describeAuth(server: McpServerInfo): string {
+  const parts: string[] = [];
+  if (server.token_keychain) parts.push(server.discovery ? "token: no Keychain (descoberto automaticamente)" : "token: no Keychain");
   if (server.bearer_env) {
-    return `token: env ${server.bearer_env} (${server.bearer_env_present ? "presente" : "ausente"})`;
+    parts.push(`${parts.length ? "alternativa" : "token"}: env ${server.bearer_env} (${server.bearer_env_present ? "presente" : "ausente"})`);
   }
-  return server.token_keychain ? "token: no Keychain" : "sem token";
+  return parts.length ? parts.join(" · ") : "sem token";
+}
+
+function showMcpResult(badge: HTMLElement, result: McpTestResult) {
+  setBadge(badge, result.ok ? `ok · ${result.message}` : result.message === "Overclock fechado" ? result.message : `erro · ${result.message}`, result.ok ? "ok" : "fail");
 }
 
 function renderMcpServers(servers: McpServerInfo[]) {
@@ -304,18 +311,18 @@ function renderMcpServers(servers: McpServerInfo[]) {
     const test = document.createElement("button");
     test.type = "button";
     test.textContent = "Testar";
-    test.addEventListener("click", async () => {
+    const runTest = async () => {
       test.disabled = true;
       setBadge(badge, "testando…", "");
       try {
-        const result = await invoke<McpTestResult>("test_mcp_server", { name: server.name });
-        setBadge(badge, result.ok ? `ok · ${result.message}` : `erro · ${result.message}`, result.ok ? "ok" : "fail");
+        showMcpResult(badge, await invoke<McpTestResult>("test_mcp_server", { name: server.name }));
       } catch (err) {
         setBadge(badge, `erro · ${String(err)}`, "fail");
       } finally {
         test.disabled = false;
       }
-    });
+    };
+    test.addEventListener("click", runTest);
     const remove = document.createElement("button");
     remove.type = "button";
     remove.textContent = "Remover";
@@ -333,6 +340,12 @@ function renderMcpServers(servers: McpServerInfo[]) {
 
     item.append(head, target, auth, buttons);
     mcpList.appendChild(item);
+
+    // Status já ao abrir a aba: resultado do "Conectar" ou um teste novo.
+    const pending = pendingMcpStatus.get(server.name);
+    pendingMcpStatus.delete(server.name);
+    if (pending) showMcpResult(badge, pending);
+    else void runTest();
   }
 }
 
@@ -350,18 +363,25 @@ function openMcpForm(preset: { name?: string; target?: string; bearerEnv?: strin
 
 $<HTMLButtonElement>("mcp-add").addEventListener("click", () => openMcpForm({}));
 
-$<HTMLButtonElement>("mcp-connect-overclock").addEventListener("click", () => {
-  openMcpForm({
-    name: "overclock",
-    target: "http://127.0.0.1:${OVERCLOCK_MCP_PORT}/mcp",
-    bearerEnv: "OVERCLOCK_MCP_BEARER_TOKEN",
-    hint: overclockEnvPresent
-      ? "env OVERCLOCK_MCP_BEARER_TOKEN encontrada neste processo — não precisa de token."
-      : "env OVERCLOCK_MCP_BEARER_TOKEN ausente: abra o Jarvis de dentro do Overclock ou cole um token.",
-  });
-});
+// "Conectar Overclock/OverClick": descobre URL e token no que o Overclock
+// grava em disco (JRV-68). Sem Overclock, cai no formulário manual.
+async function connectDiscovered(kind: "overclock" | "overclick", button: HTMLButtonElement) {
+  button.disabled = true;
+  setStatus(`conectando ${kind}…`, "");
+  try {
+    const result = await invoke<McpTestResult>("connect_mcp_server", { kind });
+    pendingMcpStatus.set(kind, result);
+    setStatus(result.ok ? `${kind} conectado` : `${kind}: ${result.message}`, result.ok ? "ok" : "error");
+    await loadTools();
+  } catch (err) {
+    setStatus(String(err), "error");
+    if (kind === "overclick") openOverclickForm();
+  } finally {
+    button.disabled = false;
+  }
+}
 
-$<HTMLButtonElement>("mcp-connect-overclick").addEventListener("click", () => {
+function openOverclickForm() {
   openMcpForm({ name: "overclick", target: "https://cloud.overclock.sh/mcp" });
   mcpTokenHint.textContent = "Cole o token de API do OverClick. ";
   const link = document.createElement("a");
@@ -371,7 +391,12 @@ $<HTMLButtonElement>("mcp-connect-overclick").addEventListener("click", () => {
     invoke("open_tools_link", { link: "overclick_tokens" }).catch((err) => setStatus(String(err), "error"));
   });
   mcpTokenHint.appendChild(link);
-});
+}
+
+for (const kind of ["overclock", "overclick"] as const) {
+  const button = $<HTMLButtonElement>(`mcp-connect-${kind}`);
+  button.addEventListener("click", () => void connectDiscovered(kind, button));
+}
 
 $<HTMLButtonElement>("mcp-cancel").addEventListener("click", () => {
   mcpToken.value = "";
@@ -407,7 +432,6 @@ async function loadTools() {
   const tools = await invoke<ToolsSettingsPayload>("get_tools_settings");
   toolsEnabledCheckbox.checked = tools.enabled;
   setFullAccessChecked(tools.full_access);
-  overclockEnvPresent = tools.overclock_env_present;
   renderMcpServers(tools.mcp_servers);
   await renderAlwaysAllow(fullAccessHint.parentElement ?? fullAccessHint, (message) => setStatus(message, "error"));
 }

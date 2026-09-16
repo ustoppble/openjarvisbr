@@ -7,7 +7,7 @@
 
 use std::time::Duration;
 
-use openjarvisbr_core::mcp;
+use openjarvisbr_core::mcp::{self, discovery};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, LogicalSize, Manager};
 
@@ -80,11 +80,7 @@ pub struct ToolsSettingsPayload {
     /// `[tools].full_access` (JRV-65).
     pub full_access: bool,
     pub mcp_servers: Vec<tools_config::McpServerInfo>,
-    /// Para o botão "Conectar Overclock": a env do token existe neste processo?
-    pub overclock_env_present: bool,
 }
-
-const OVERCLOCK_BEARER_ENV: &str = "OVERCLOCK_MCP_BEARER_TOKEN";
 
 /// Estado da aba Ferramentas: toggle geral e servidores MCP (URL mascarada,
 /// token só como origem: nome da env ou "no Keychain").
@@ -94,7 +90,6 @@ pub fn get_tools_settings() -> ToolsSettingsPayload {
         enabled: tools_config::tools_enabled(),
         full_access: openjarvisbr_core::config::load_settings().full_access,
         mcp_servers: tools_config::mcp_servers(),
-        overclock_env_present: tools_config::env_present(OVERCLOCK_BEARER_ENV),
     }
 }
 
@@ -144,12 +139,45 @@ pub async fn test_mcp_server(name: String) -> McpTestResult {
     let Some(config) = tools_config::find_server(&name) else {
         return McpTestResult { ok: false, message: "servidor não encontrado no config".to_string() };
     };
+    probe(config).await
+}
+
+async fn probe(config: mcp::McpServerConfig) -> McpTestResult {
+    let kind = discovery::Kind::of(&config);
     let client = mcp::McpClient::new(config);
     match tokio::time::timeout(MCP_TEST_TIMEOUT, client.list_tools()).await {
         Ok(Ok(tools)) => McpTestResult { ok: true, message: format!("{} tools", tools.len()) },
-        Ok(Err(err)) => McpTestResult { ok: false, message: err.to_string() },
+        Ok(Err(err)) => McpTestResult { ok: false, message: describe_error(kind, &err) },
         Err(_) => McpTestResult { ok: false, message: "tempo esgotado".to_string() },
     }
+}
+
+/// Mensagem da aba para um erro do core; recusa no Overclock local é o app
+/// fechado (sem porta nem endereço na tela).
+fn describe_error(kind: Option<discovery::Kind>, err: &mcp::McpError) -> String {
+    match (kind, err) {
+        (Some(discovery::Kind::Overclock), mcp::McpError::Refused) => "Overclock fechado".to_string(),
+        _ => err.to_string(),
+    }
+}
+
+/// "Conectar Overclock" / "Conectar OverClick" (JRV-68): descobre URL e
+/// token no que o Overclock grava em disco (ou no ~/.claude.json, para o
+/// OverClick), guarda o token no Keychain, grava o servidor no config só com
+/// `token_keychain`, reinicia o motor e devolve o teste de conexão.
+#[tauri::command]
+pub async fn connect_mcp_server(app: AppHandle, kind: String) -> Result<McpTestResult, String> {
+    let kind = discovery::Kind::parse(&kind).ok_or_else(|| format!("servidor desconhecido: {kind}"))?;
+    let existing = tools_config::find_server(kind.as_str());
+    let config = tauri::async_runtime::spawn_blocking(move || discovery::connect(kind, existing.as_ref()))
+        .await
+        .map_err(|_| "falha interna ao descobrir o servidor".to_string())?
+        .map_err(|err| err.to_string())?;
+    tools_config::upsert_server(&config)?;
+    tracing::info!(server = %config.name, "servidor MCP descoberto e salvo");
+    let result = probe(config).await;
+    crate::restart_engine(app).await;
+    Ok(result)
 }
 
 /// Links externos da aba (onde pegar o token do OverClick). Só destinos

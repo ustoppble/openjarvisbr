@@ -27,6 +27,7 @@ impl Transport {
     pub fn open(config: &McpServerConfig) -> Result<Self, McpError> {
         if let Some(url) = &config.url {
             return Ok(Transport::Http(HttpTransport::new(
+                config.name.clone(),
                 expand_env(url)?,
                 config.bearer_env.clone(),
                 config.token_keychain.clone(),
@@ -67,6 +68,7 @@ impl Transport {
 
 pub struct HttpTransport {
     client: reqwest::Client,
+    name: String,
     url: String,
     bearer_env: Option<String>,
     token_keychain: Option<String>,
@@ -76,6 +78,7 @@ pub struct HttpTransport {
 
 impl HttpTransport {
     fn new(
+        name: String,
         url: String,
         bearer_env: Option<String>,
         token_keychain: Option<String>,
@@ -89,6 +92,7 @@ impl HttpTransport {
             .map_err(|err| McpError::Transport(describe(err)))?;
         Ok(Self {
             client,
+            name,
             url,
             bearer_env,
             token_keychain,
@@ -104,17 +108,17 @@ impl HttpTransport {
             ACCEPT,
             HeaderValue::from_static("application/json, text/event-stream"),
         );
-        let token = match (&self.bearer_env, &self.token_keychain) {
-            (Some(env), _) => Some((
-                std::env::var(env)
-                    .ok()
-                    .filter(|t| !t.is_empty())
-                    .ok_or_else(|| McpError::MissingEnv(env.clone()))?,
-                env.clone(),
-            )),
-            (None, Some(name)) => Some((super::keychain_token(name)?, name.clone())),
-            (None, None) => None,
-        };
+        let token = super::resolve_token(
+            "",
+            self.token_keychain.as_deref(),
+            self.bearer_env.as_deref(),
+            |name| super::keychain_token(name).ok(),
+            |name| std::env::var(name).ok(),
+        )
+        .map_err(|err| match err {
+            McpError::NoToken { env, .. } => McpError::NoToken { server: self.name.clone(), env },
+            other => other,
+        })?;
         if let Some((token, source)) = token {
             let mut value = HeaderValue::from_str(&format!("Bearer {token}"))
                 .map_err(|_| McpError::Protocol(format!("token inválido em {source}")))?;
@@ -221,9 +225,25 @@ fn matches_id(message: &Value, id: u64) -> bool {
 fn transport_error(err: reqwest::Error) -> McpError {
     if err.is_timeout() {
         McpError::Timeout
+    } else if is_refused(&err) {
+        McpError::Refused
     } else {
         McpError::Transport(describe(err))
     }
+}
+
+/// Conexão recusada (nada escutando na porta — ex.: Overclock fechado).
+fn is_refused(err: &reqwest::Error) -> bool {
+    let mut source = std::error::Error::source(err);
+    while let Some(inner) = source {
+        if let Some(io) = inner.downcast_ref::<std::io::Error>() {
+            if io.kind() == std::io::ErrorKind::ConnectionRefused {
+                return true;
+            }
+        }
+        source = inner.source();
+    }
+    false
 }
 
 fn describe(err: reqwest::Error) -> String {

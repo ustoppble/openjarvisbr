@@ -8,6 +8,7 @@
 //! requisição e nunca aparece em log, erro, config ou resultado.
 
 pub mod client;
+pub mod discovery;
 pub mod tool;
 pub mod transport;
 
@@ -48,9 +49,14 @@ pub struct McpServerConfig {
     pub bearer_env: Option<String>,
     /// Nome da entrada no Keychain (macOS) / Credential Manager (Windows)
     /// com o bearer token, gravada pela aba Ferramentas (JRV-58). Usado só
-    /// quando `bearer_env` está ausente.
+    /// Tem prioridade sobre `bearer_env` (JRV-68).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub token_keychain: Option<String>,
+    /// Descoberta automática (`"overclock"` / `"overclick"`): no start do
+    /// Engine e no botão Conectar, URL e token são relidos do Overclock
+    /// (ver `discovery`). Ausente, vale pelo nome do servidor.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub discovery: Option<String>,
 }
 
 /// Serviço das entradas de token MCP no Keychain/Credential Manager.
@@ -69,6 +75,39 @@ pub fn keychain_token(name: &str) -> Result<String, McpError> {
         .ok()
         .filter(|token| !token.is_empty())
         .ok_or_else(|| McpError::Keychain(name.to_string()))
+}
+
+/// Token do servidor, na ordem Keychain → `bearer_env` → erro. `keychain` e
+/// `env` são as consultas (injetáveis nos testes); devolve o token e a
+/// origem (nome da entrada ou da env), nunca loga o valor.
+pub fn resolve_token(
+    server_name: &str,
+    token_keychain: Option<&str>,
+    bearer_env: Option<&str>,
+    keychain: impl Fn(&str) -> Option<String>,
+    env: impl Fn(&str) -> Option<String>,
+) -> Result<Option<(String, String)>, McpError> {
+    if token_keychain.is_none() && bearer_env.is_none() {
+        return Ok(None);
+    }
+    let from_keychain = token_keychain
+        .and_then(|name| keychain(name).filter(|t| !t.is_empty()).map(|t| (t, name.to_string())));
+    if let Some(found) = from_keychain {
+        return Ok(Some(found));
+    }
+    let from_env = bearer_env
+        .and_then(|name| env(name).filter(|t| !t.is_empty()).map(|t| (t, name.to_string())));
+    if let Some(found) = from_env {
+        return Ok(Some(found));
+    }
+    Err(match (token_keychain, bearer_env) {
+        (Some(_), Some(env)) => McpError::NoToken {
+            server: server_name.to_string(),
+            env: env.to_string(),
+        },
+        (None, Some(env)) => McpError::MissingEnv(env.to_string()),
+        _ => McpError::Keychain(token_keychain.unwrap_or(server_name).to_string()),
+    })
 }
 
 /// Grava (ou troca) o token de `name` no Keychain.
@@ -95,6 +134,12 @@ pub enum McpError {
     MissingEnv(String),
     #[error("token ausente no Keychain: {0}")]
     Keychain(String),
+    #[error("sem token para '{server}': nem no Keychain nem na env {env} — use Conectar na aba Ferramentas")]
+    NoToken { server: String, env: String },
+    #[error("{0}")]
+    Discovery(String),
+    #[error("conexão recusada")]
+    Refused,
     #[error("não autorizado (HTTP {0})")]
     Unauthorized(u16),
     #[error("HTTP {0}")]
@@ -192,6 +237,27 @@ mod tests {
             expand_with("aberto ${PORT", lookup).unwrap(),
             "aberto ${PORT"
         );
+    }
+
+    #[test]
+    fn token_vem_do_keychain_antes_da_env() {
+        let keychain = |name: &str| (name == "overclock").then(|| "do-keychain".to_string());
+        let env = |name: &str| (name == "ENV_T").then(|| "da-env".to_string());
+        let none = |_: &str| None;
+        let got = resolve_token("overclock", Some("overclock"), Some("ENV_T"), keychain, env).unwrap();
+        assert_eq!(got, Some(("do-keychain".to_string(), "overclock".to_string())));
+        let got = resolve_token("x", Some("vazio"), Some("ENV_T"), keychain, env).unwrap();
+        assert_eq!(got, Some(("da-env".to_string(), "ENV_T".to_string())));
+        assert_eq!(resolve_token("x", None, None, none, none).unwrap(), None);
+        let err = resolve_token("x", Some("vazio"), Some("ENV_T"), none, none).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "sem token para 'x': nem no Keychain nem na env ENV_T — use Conectar na aba Ferramentas"
+        );
+        let err = resolve_token("x", None, Some("ENV_T"), keychain, none).unwrap_err();
+        assert_eq!(err.to_string(), "variável de ambiente ausente: ENV_T");
+        let err = resolve_token("x", Some("k"), None, none, env).unwrap_err();
+        assert_eq!(err.to_string(), "token ausente no Keychain: k");
     }
 
     #[test]
