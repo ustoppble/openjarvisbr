@@ -2,3 +2,8 @@
 target/
 .env*
 config.toml
+
+
+# Added by cargo
+
+/target
