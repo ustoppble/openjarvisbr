@@ -70,6 +70,10 @@ pub struct ToolsSection {
     /// Ausente = desligado.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub full_access: Option<bool>,
+    /// Ferramentas liberadas para sempre ("sempre pode"): não pedem mais
+    /// confirmação. Ausente = nenhuma.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub always_allow: Vec<String>,
 }
 
 /// Globs de ferramentas para o motor: nenhum com `[tools].enabled = false`,
@@ -202,6 +206,8 @@ pub struct Settings {
     pub tools_enabled: bool,
     /// `[tools].full_access` (padrão desligado).
     pub full_access: bool,
+    /// `[tools].always_allow` (JRV-66).
+    pub always_allow: Vec<String>,
 }
 
 /// Estilo do overlay já resolvido: `surreal` (padrão) ou `orb`.
@@ -334,7 +340,15 @@ pub fn load_settings() -> Settings {
         profile: parsed.profile.filter(|s| !s.trim().is_empty()),
         custom_profiles: parsed.profiles,
         tools_enabled: parsed.tools.as_ref().and_then(|t| t.enabled).unwrap_or(true),
-        full_access: parsed.tools.and_then(|t| t.full_access).unwrap_or(false),
+        full_access: parsed
+            .tools
+            .as_ref()
+            .and_then(|t| t.full_access)
+            .unwrap_or(false),
+        always_allow: parsed
+            .tools
+            .map(|t| crate::tools::decisions::clean(&t.always_allow))
+            .unwrap_or_default(),
     }
 }
 
@@ -433,6 +447,20 @@ pub fn save_profile(id: &str) -> Result<(), ConfigError> {
 /// Grava só `[tools].full_access`, preservando literalmente o resto do
 /// arquivo (inclusive seções que o core não modela).
 pub fn save_full_access(on: bool) -> Result<(), ConfigError> {
+    save_tools_value("full_access", toml::Value::Boolean(on))
+}
+
+/// Grava só `[tools].always_allow` (JRV-66), preservando o resto do arquivo.
+pub fn save_always_allow(names: &[String]) -> Result<(), ConfigError> {
+    let names = crate::tools::decisions::clean(names)
+        .into_iter()
+        .map(toml::Value::String)
+        .collect();
+    save_tools_value("always_allow", toml::Value::Array(names))
+}
+
+/// Troca uma chave de `[tools]` preservando literalmente o resto do arquivo.
+fn save_tools_value(key: &str, value: toml::Value) -> Result<(), ConfigError> {
     let path = config_path().ok_or(ConfigError::NoHome)?;
     let mut table = std::fs::read_to_string(&path)
         .ok()
@@ -445,7 +473,7 @@ pub fn save_full_access(on: bool) -> Result<(), ConfigError> {
         *tools = toml::Value::Table(toml::Table::new());
     }
     if let Some(tools) = tools.as_table_mut() {
-        tools.insert("full_access".to_string(), toml::Value::Boolean(on));
+        tools.insert(key.to_string(), value);
     }
     let contents = toml::to_string_pretty(&table).map_err(ConfigError::SerializeFile)?;
     if let Some(parent) = path.parent() {
@@ -579,6 +607,30 @@ mod tests {
         assert!(load_settings().full_access);
         save_full_access(false).unwrap();
         assert!(!load_settings().full_access);
+    }
+
+    #[test]
+    fn always_allow_is_persisted_and_survives_the_settings_save() {
+        let _home = TempHome::new();
+        assert!(load_settings().always_allow.is_empty());
+        let path = config_path().unwrap();
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, "api_key = \"k\"\n[tools]\nfull_access = true\n").unwrap();
+
+        save_always_allow(&["shell.run".into(), "shell.run".into(), " fs.write".into()]).unwrap();
+        let settings = load_settings();
+        assert_eq!(settings.always_allow, ["shell.run", "fs.write"]);
+        assert!(settings.full_access);
+        assert_eq!(load_api_key().unwrap(), "k");
+
+        // "Reabrir o app": a janela de configurações regrava o arquivo.
+        save(SaveSettings::default()).unwrap();
+        assert_eq!(load_settings().always_allow, ["shell.run", "fs.write"]);
+
+        save_always_allow(&["fs.write".into()]).unwrap();
+        assert_eq!(load_settings().always_allow, ["fs.write"]);
+        save_always_allow(&[]).unwrap();
+        assert!(load_settings().always_allow.is_empty());
     }
 
     #[test]

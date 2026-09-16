@@ -25,6 +25,7 @@ use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 use tokio::sync::broadcast;
 
 use commands::settings::{get_settings, list_devices, save_settings, set_fx_amount};
+use commands::always_allow::{get_always_allow, remove_always_allow};
 use commands::permissions::{
     check_accessibility, get_permissions, open_privacy_pane, request_accessibility,
     request_permissions, reveal_app,
@@ -441,6 +442,7 @@ fn build_engine_config(api_key: String, greeting: Option<String>) -> EngineConfi
         tools,
         mcp_servers: settings.mcp_servers,
         full_access: settings.full_access,
+        always_allow: settings.always_allow,
     }
 }
 
@@ -567,6 +569,8 @@ fn main() {
             set_overlay_tool_strip,
             get_tools_settings,
             set_full_access,
+            get_always_allow,
+            remove_always_allow,
             add_mcp_server,
             remove_mcp_server,
             test_mcp_server,

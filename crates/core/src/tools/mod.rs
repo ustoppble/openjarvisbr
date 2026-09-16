@@ -2,6 +2,7 @@
 //! implementam, o `Registry` que as guarda e a política de risco que decide se
 //! uma chamada executa direto ou pede confirmação.
 
+pub mod decisions;
 pub mod local;
 pub mod policy;
 pub mod registry;

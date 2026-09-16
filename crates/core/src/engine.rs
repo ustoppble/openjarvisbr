@@ -25,6 +25,8 @@ use crate::engine_tools::{self, VoiceAnswer};
 use crate::live::protocol::ServerEvent;
 use crate::live::session::{LiveConfig, LiveError, LiveSession};
 use crate::mcp::McpServerConfig;
+use crate::config;
+use crate::tools::decisions::{self, Decisions};
 use crate::tools::{FullAccess, Policy, Registry, Risk, ToolCall, ToolError, ToolResult, ToolSpec};
 
 /// Capacidade do canal entre a thread de captura e o loop async.
@@ -138,6 +140,9 @@ pub struct EngineConfig {
     /// Acesso total: nada pede confirmação e `fs.*` sai do home. Muda ao vivo
     /// com [`EngineHandle::set_full_access`].
     pub full_access: bool,
+    /// `[tools].always_allow`: ferramentas que nunca pedem confirmação.
+    /// Muda ao vivo com [`EngineHandle::set_always_allow`].
+    pub always_allow: Vec<String>,
 }
 
 impl std::fmt::Debug for EngineConfig {
@@ -153,6 +158,7 @@ impl std::fmt::Debug for EngineConfig {
             .field("greeting", &self.greeting)
             .field("tools", &self.tools)
             .field("full_access", &self.full_access)
+            .field("always_allow", &self.always_allow)
             .field(
                 "mcp_servers",
                 &self.mcp_servers.iter().map(|s| &s.name).collect::<Vec<_>>(),
@@ -222,6 +228,7 @@ enum Command {
     Reconnect,
     SetFxAmount(f32),
     SetFullAccess(bool),
+    SetAlwaysAllow(Vec<String>),
     ConfirmTool { id: String, approve: bool },
     Stop,
 }
@@ -258,6 +265,12 @@ impl EngineHandle {
     /// [`EngineEvent::FullAccess`].
     pub fn set_full_access(&self, on: bool) {
         let _ = self.commands.send(Command::SetFullAccess(on));
+    }
+
+    /// Troca a lista "sempre permitido" (ex.: removida nas configurações) sem
+    /// reconectar. Quem chama já gravou o config.
+    pub fn set_always_allow(&self, names: Vec<String>) {
+        let _ = self.commands.send(Command::SetAlwaysAllow(names));
     }
 
     /// Responde a um [`EngineEvent::ToolConfirmNeeded`]. Id desconhecido (já
@@ -566,6 +579,18 @@ struct Worker {
     approved: Vec<(String, serde_json::Value, Instant)>,
     /// Fala do modelo no turno corrente (para ver se terminou em "confirma?").
     model_turn: String,
+    /// Fala do turno anterior do modelo, para descartar repetição literal.
+    previous_model_turn: String,
+    /// O turno corrente repete o anterior: áudio e texto dele são descartados.
+    turn_repeated: bool,
+    /// O que já não pede confirmação: leitura, aprovadas na sessão e
+    /// `always_allow`.
+    decisions: Decisions,
+    /// Última ferramenta que pediu confirmação, alvo de um "sempre pode"
+    /// dito depois.
+    last_confirm_tool: Option<String>,
+    /// Fala do usuário desde o fim do último turno do modelo (chega picada).
+    user_heard: String,
     /// Quando o modelo perguntou "confirma?" sem chamada pendente, e o que o
     /// usuário disse desde então.
     question: Option<(Instant, String)>,
@@ -655,6 +680,11 @@ impl Worker {
             confirms: Vec::new(),
             approved: Vec::new(),
             model_turn: String::new(),
+            previous_model_turn: String::new(),
+            turn_repeated: false,
+            decisions: Decisions::new(&config.always_allow),
+            last_confirm_tool: None,
+            user_heard: String::new(),
             question: None,
             early_approval: None,
             running: HashMap::new(),
@@ -707,6 +737,7 @@ impl Worker {
                     Some(Command::ConfirmTool { id, approve }) => self.resolve_confirm(&id, approve, "botão"),
                     Some(Command::SetFxAmount(amount)) => self.voice_fx = VoiceFx::new(amount),
                     Some(Command::SetFullAccess(on)) => self.set_full_access(on),
+                    Some(Command::SetAlwaysAllow(names)) => self.set_always_allow(names),
                     Some(Command::Reconnect) => {
                         if !self.reconnect().await {
                             break;
@@ -756,6 +787,10 @@ impl Worker {
     fn on_server_event(&mut self, event: Option<ServerEvent>) {
         match event {
             Some(ServerEvent::Audio(mut samples)) => {
+                if self.turn_repeated {
+                    // Fala repetida: não toca.
+                    return;
+                }
                 self.last_model_audio = Some(Instant::now());
                 if let Some(r) = self.recorder.as_mut() {
                     r.event(
@@ -788,7 +823,10 @@ impl Worker {
                 if let Some(r) = self.recorder.as_mut() {
                     r.event("user_text", &text);
                 }
-                self.hear_confirmation(&text);
+                self.user_heard.push_str(&text);
+                if !self.hear_always_allow() {
+                    self.hear_confirmation(&text);
+                }
                 self.emit.send(EngineEvent::UserText(text));
             }
             Some(ServerEvent::ModelText(text)) => {
@@ -796,6 +834,9 @@ impl Worker {
                     r.event("model_text", &text);
                 }
                 self.model_turn.push_str(&text);
+                if self.turn_repeated || self.check_repeat() {
+                    return;
+                }
                 self.emit.send(EngineEvent::ModelText(text));
             }
             Some(ServerEvent::TurnComplete) => {
@@ -852,6 +893,84 @@ impl Worker {
         self.emit.send(EngineEvent::FullAccess(on));
     }
 
+    /// Lista "sempre permitido" trocada de fora (configurações).
+    fn set_always_allow(&mut self, names: Vec<String>) {
+        info!(ferramentas = ?names, "lista sempre permitido alterada");
+        self.decisions.set_always_allow(&names);
+    }
+
+    /// A fala do modelo neste turno repete a do anterior? Marca o turno,
+    /// descarta o áudio na fila e avisa no log.
+    fn check_repeat(&mut self) -> bool {
+        if !engine_tools::is_repeat(&self.model_turn, &self.previous_model_turn) {
+            return false;
+        }
+        warn!(fala = %self.model_turn.trim(), "modelo repetiu a fala anterior; descartada");
+        if let Some(r) = self.recorder.as_mut() {
+            r.event("model_repeat", self.model_turn.trim());
+        }
+        self.turn_repeated = true;
+        self.output.flush();
+        self.last_model_audio = None;
+        self.speaking = false;
+        self.update_state();
+        true
+    }
+
+    /// "Sempre pode" / "não pergunta mais": libera para sempre as pendentes
+    /// (aprovando-as), a ferramenta citada ("rodar comandos") ou a última que
+    /// pediu confirmação. `true` se a fala foi consumida.
+    fn hear_always_allow(&mut self) -> bool {
+        if !decisions::always_allow_intent(&self.user_heard) {
+            return false;
+        }
+        let pending: Vec<(String, String)> = self
+            .confirms
+            .iter()
+            .map(|p| (p.call.id.clone(), p.call.name.clone()))
+            .collect();
+        let mut names: Vec<String> = pending.iter().map(|(_, name)| name.clone()).collect();
+        if names.is_empty() {
+            let target = decisions::tool_hint(&self.user_heard)
+                .map(str::to_string)
+                .or_else(|| self.last_confirm_tool.clone());
+            names.extend(target);
+        }
+        self.user_heard.clear();
+        if names.is_empty() {
+            return false;
+        }
+        let mut changed = false;
+        for name in &names {
+            changed |= self.decisions.allow_always(name);
+        }
+        info!(ferramentas = ?names, "liberadas para sempre por voz");
+        if let Some(r) = self.recorder.as_mut() {
+            r.event("always_allow", names.join(","));
+        }
+        if changed {
+            self.persist_always_allow();
+        }
+        if self.question.take().is_some() {
+            self.early_approval = Some(Instant::now());
+        }
+        for (id, _) in pending {
+            self.resolve_confirm(&id, true, "voz, sempre pode");
+        }
+        true
+    }
+
+    /// Grava `[tools].always_allow` no config (só no backend real: os testes
+    /// não mexem no config do usuário).
+    fn persist_always_allow(&self) {
+        if !matches!(self.backend, Backend::Real) {
+            return;
+        }
+        if let Err(err) = config::save_always_allow(&self.decisions.always_allow()) {
+            warn!(erro = %err, "não foi possível gravar [tools].always_allow");
+        }
+    }
+
     /// Aplica a política: `Safe` executa já; `Confirm` segura e pergunta.
     fn on_tool_call(&mut self, call: ToolCall) {
         let summary = engine_tools::call_summary(&call);
@@ -866,7 +985,14 @@ impl Worker {
             self.respond(&call.name, ToolResult::err(&call.id, error));
             return;
         };
-        let risk = self.policy.risk(&spec);
+        let mut risk = self.policy.risk(&spec);
+        if risk == Risk::Confirm
+            && self.decisions.allows(&call.name)
+            && !self.recently_approved(&call)
+        {
+            // Já aprovada nesta sessão, liberada para sempre ou só leitura.
+            risk = Risk::Safe;
+        }
         if let Some(r) = self.recorder.as_mut() {
             r.event("tool_call", format!("{} [{risk:?}] {summary}", call.id));
         }
@@ -890,6 +1016,7 @@ impl Worker {
             }
             Risk::Confirm => {
                 info!(ferramenta = %call.name, "aguardando confirmação");
+                self.last_confirm_tool = Some(call.name.clone());
                 let id = call.id.clone();
                 self.emit.send(EngineEvent::ToolConfirmNeeded {
                     id: id.clone(),
@@ -917,6 +1044,19 @@ impl Worker {
     /// sem chamada pendente, a próxima resposta do usuário fica valendo.
     fn end_model_turn(&mut self) {
         let turn = std::mem::take(&mut self.model_turn);
+        self.user_heard.clear();
+        if !self.turn_repeated
+            && engine_tools::is_repeat(&turn, &self.previous_model_turn)
+        {
+            warn!(fala = %turn.trim(), "modelo repetiu a fala anterior; descartada");
+            self.output.flush();
+            self.last_model_audio = None;
+            self.speaking = false;
+        }
+        self.turn_repeated = false;
+        if !turn.trim().is_empty() {
+            self.previous_model_turn = turn.clone();
+        }
         if self.confirms.is_empty() && engine_tools::asks_confirmation(&turn) {
             self.question = Some((Instant::now(), String::new()));
         }
@@ -975,6 +1115,7 @@ impl Worker {
         }
         info!(ferramenta = %pending.call.name, aprovada = approve, via, "confirmação");
         if approve {
+            self.decisions.approve_for_session(&pending.call.name);
             self.approved
                 .retain(|(_, _, at)| at.elapsed() < engine_tools::REPEAT_WINDOW);
             self.approved.push((
@@ -1099,6 +1240,8 @@ impl Worker {
         self.question = None;
         self.early_approval = None;
         self.model_turn.clear();
+        self.turn_repeated = false;
+        self.user_heard.clear();
         let ids: Vec<String> = self
             .confirms
             .iter()
@@ -1163,6 +1306,9 @@ impl Worker {
                         Some(Command::SetFullAccess(on)) => {
                             self.full_access.set(on);
                             self.emit.send(EngineEvent::FullAccess(on));
+                        }
+                        Some(Command::SetAlwaysAllow(names)) => {
+                            self.decisions.set_always_allow(&names);
                         }
                         Some(Command::Reconnect) | Some(Command::ConfirmTool { .. }) => {}
                         Some(Command::Stop) | None => break Connected::Stopped,
@@ -1412,6 +1558,7 @@ mod tests {
             tools: Vec::new(),
             mcp_servers: Vec::new(),
             full_access: false,
+            always_allow: Vec::new(),
         }
     }
 
@@ -1632,6 +1779,10 @@ mod tests {
                 name: "shell.run",
                 risk: Risk::Confirm,
             }));
+            registry.register(Box::new(Echo {
+                name: "fs.write",
+                risk: Risk::Confirm,
+            }));
             let timeouts = ToolTimeouts {
                 voice_window: Duration::from_secs(5),
                 confirm,
@@ -1839,10 +1990,11 @@ mod tests {
             let result = next_response(&mut h.responses).await;
             assert_eq!(result, ToolResult::ok("c8", json!({"command": "ls"})));
 
-            // Sem pergunta do modelo, "sim" solto não aprova nada adiante.
+            // Sem pergunta do modelo, "sim" solto não aprova nada adiante
+            // (outra ferramenta: shell.run já está aprovada na sessão).
             h.script.send(ServerEvent::UserText(" sim".into())).await.unwrap();
             h.script
-                .send(call("c9", "shell.run", json!({"command": "pwd"})))
+                .send(call("c9", "fs.write", json!({"path": "a.txt"})))
                 .await
                 .unwrap();
             assert!(
@@ -1882,6 +2034,150 @@ mod tests {
             let ok = next_response(&mut h.responses).await;
             assert_eq!(ok.id, "c5");
             assert!(ok.error.is_none());
+            h.handle.stop().await;
+        }
+
+        /// Espera o `ToolConfirmNeeded` de `id`; falha se `id` vier sem pedir.
+        async fn asks(h: &mut Harness, id: &str) -> bool {
+            loop {
+                match next_tool_event(&mut h.events).await {
+                    EngineEvent::ToolConfirmNeeded { id: asked, .. } if asked == id => return true,
+                    EngineEvent::ToolResult { id: done, .. } if done == id => return false,
+                    _ => {}
+                }
+            }
+        }
+
+        #[tokio::test]
+        async fn approved_tool_is_not_asked_again_in_the_session() {
+            let mut h = start_tools(&["*"], Duration::from_secs(5)).await;
+            h.script
+                .send(call("s1", "shell.run", json!({"command": "ls"})))
+                .await
+                .unwrap();
+            assert!(asks(&mut h, "s1").await);
+            h.script.send(ServerEvent::UserText("sim".into())).await.unwrap();
+            assert_eq!(
+                next_response(&mut h.responses).await,
+                ToolResult::ok("s1", json!({"command": "ls"}))
+            );
+
+            // "roda ls" de novo (outro comando, fora da janela de repetição):
+            // executa sem perguntar.
+            h.script
+                .send(call("s2", "shell.run", json!({"command": "ls -la"})))
+                .await
+                .unwrap();
+            assert!(!asks(&mut h, "s2").await);
+            assert_eq!(
+                next_response(&mut h.responses).await,
+                ToolResult::ok("s2", json!({"command": "ls -la"}))
+            );
+
+            // Outra ferramenta arriscada ainda pergunta.
+            h.script
+                .send(call("s3", "fs.write", json!({"path": "a.txt"})))
+                .await
+                .unwrap();
+            assert!(asks(&mut h, "s3").await);
+            h.handle.stop().await;
+        }
+
+        #[tokio::test]
+        async fn always_allow_by_voice_approves_pending_and_later_calls() {
+            let mut h = start_tools(&["*"], Duration::from_secs(5)).await;
+            h.script
+                .send(call("a1", "fs.write", json!({"path": "a.txt"})))
+                .await
+                .unwrap();
+            assert!(asks(&mut h, "a1").await);
+            // "não pergunta mais" não pode virar negação.
+            h.script
+                .send(ServerEvent::UserText("pode, não pergunta mais".into()))
+                .await
+                .unwrap();
+            assert_eq!(
+                next_response(&mut h.responses).await,
+                ToolResult::ok("a1", json!({"path": "a.txt"}))
+            );
+
+            // Sem pedido pendente, "sempre pode rodar comandos" libera shell.run.
+            h.script
+                .send(ServerEvent::UserText("sempre pode rodar comandos".into()))
+                .await
+                .unwrap();
+            h.script
+                .send(call("a2", "shell.run", json!({"command": "pwd"})))
+                .await
+                .unwrap();
+            assert!(!asks(&mut h, "a2").await);
+
+            // Removida nas configurações: volta a perguntar.
+            h.handle.set_always_allow(vec!["fs.write".into()]);
+            // Comando e roteiro chegam por canais diferentes.
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            h.script
+                .send(call("a3", "shell.run", json!({"command": "whoami"})))
+                .await
+                .unwrap();
+            assert!(asks(&mut h, "a3").await);
+            h.handle.stop().await;
+        }
+
+        #[tokio::test]
+        async fn always_allow_from_config_never_asks() {
+            let (script_tx, script_rx) = mpsc::channel(16);
+            let (_mic_tx, mic_rx) = mpsc::channel(16);
+            let (resp_tx, mut responses) = mpsc::unbounded_channel();
+            let mut registry = Registry::new();
+            registry.register(Box::new(Echo {
+                name: "shell.run",
+                risk: Risk::Confirm,
+            }));
+            let timeouts = ToolTimeouts {
+                voice_window: Duration::from_secs(5),
+                confirm: Duration::from_secs(5),
+                exec: Duration::from_secs(5),
+            };
+            let backend = Backend::Fake(
+                fake::FakeBackend::new(script_rx, mic_rx).with_tools(registry, timeouts, resp_tx),
+            );
+            let mut config = test_config();
+            config.tools = vec!["*".into()];
+            config.always_allow = vec!["shell.run".into()];
+            let handle = start_with(config, backend).await.expect("motor fake sobe");
+            script_tx
+                .send(call("p1", "shell.run", json!({"command": "ls"})))
+                .await
+                .unwrap();
+            assert_eq!(
+                next_response(&mut responses).await,
+                ToolResult::ok("p1", json!({"command": "ls"}))
+            );
+            handle.stop().await;
+        }
+
+        #[tokio::test]
+        async fn repeated_model_speech_is_dropped() {
+            let mut h = start_tools(&["*"], Duration::from_secs(5)).await;
+            let turn = async |h: &mut Harness, text: &str| -> Vec<String> {
+                h.script
+                    .send(ServerEvent::ModelText(text.into()))
+                    .await
+                    .unwrap();
+                h.script.send(ServerEvent::TurnComplete).await.unwrap();
+                let mut texts = Vec::new();
+                loop {
+                    match next_non_level(&mut h.events).await {
+                        EngineEvent::ModelText(t) => texts.push(t),
+                        EngineEvent::TurnComplete => return texts,
+                        _ => {}
+                    }
+                }
+            };
+            assert_eq!(turn(&mut h, "Pronto, listei.").await, ["Pronto, listei."]);
+            assert!(turn(&mut h, "pronto listei").await.is_empty());
+            assert_eq!(turn(&mut h, "Abri o Safari.").await, ["Abri o Safari."]);
             h.handle.stop().await;
         }
 
@@ -1928,11 +2224,16 @@ mod tests {
     /// ambiente: fala sintetizada pelo `say` do macOS entra como microfone.
     /// `JRV_LIVE_SAY="abre o Safari" cargo test -p openjarvisbr-core --lib
     /// live_tool_flow -- --ignored --nocapture`. `JRV_LIVE_ANSWER` (padrão
-    /// "sim") é dito quando surge um pedido de confirmação.
+    /// "sim") é dito quando surge um pedido de confirmação. Várias falas na
+    /// mesma sessão separadas por `|` ("roda ls|roda ls de novo");
+    /// `JRV_LIVE_EXPECT_CONFIRMS` confere quantas vezes o app perguntou.
     #[tokio::test]
     #[ignore = "usa a Live API, o say do macOS e os MCPs reais"]
     async fn live_tool_flow() {
-        let utterance = std::env::var("JRV_LIVE_SAY").unwrap_or_else(|_| "abre o Safari".into());
+        let said = std::env::var("JRV_LIVE_SAY").unwrap_or_else(|_| "abre o Safari".into());
+        let mut utterances: std::collections::VecDeque<String> =
+            said.split('|').map(|u| u.trim().to_string()).collect();
+        let utterance = utterances.pop_front().unwrap_or_default();
         let answer = std::env::var("JRV_LIVE_ANSWER").unwrap_or_else(|_| "sim".into());
         let settings = crate::config::load_settings();
         let mut config = test_config();
@@ -1998,13 +2299,34 @@ mod tests {
 
         let deadline = Instant::now() + Duration::from_secs(90);
         let mut results = Vec::new();
+        let mut results_before = 0;
+        let mut confirms = 0;
         let mut asked = false;
         let mut last_activity = Instant::now();
         let mut model_turn = String::new();
         while Instant::now() < deadline {
             // Terminou quando algo executou e a conversa ficou quieta.
-            if !results.is_empty() && !asked && last_activity.elapsed() > Duration::from_secs(8) {
-                break;
+            if results.len() > results_before
+                && !asked
+                && last_activity.elapsed() > Duration::from_secs(8)
+            {
+                let Some(next) = utterances.pop_front() else {
+                    break;
+                };
+                idle.abort();
+                speak(next, mic_tx.clone()).await;
+                let idle_mic = mic_tx.clone();
+                idle = tokio::spawn(async move {
+                    loop {
+                        if idle_mic.send(vec![0i16; 320]).await.is_err() {
+                            break;
+                        }
+                        tokio::time::sleep(Duration::from_millis(20)).await;
+                    }
+                });
+                results_before = results.len();
+                last_activity = Instant::now();
+                continue;
             }
             let Ok(Ok(event)) =
                 tokio::time::timeout(Duration::from_millis(500), events.recv()).await
@@ -2046,6 +2368,7 @@ mod tests {
                 }
                 EngineEvent::ToolConfirmNeeded { summary, .. } => {
                     println!("   [confirm_needed] {summary}");
+                    confirms += 1;
                     asked = true;
                 }
                 EngineEvent::ToolResult { name, ok, summary, .. } => {
@@ -2057,7 +2380,11 @@ mod tests {
         }
         idle.abort();
         handle.stop().await;
+        println!(">> pedidos de confirmação: {confirms}");
         assert!(results.contains(&true), "nenhuma ferramenta executou com sucesso");
+        if let Ok(expected) = std::env::var("JRV_LIVE_EXPECT_CONFIRMS") {
+            assert_eq!(confirms.to_string(), expected, "pedidos de confirmação");
+        }
     }
 
     /// Texto → PCM 16kHz mono pelo `say` do macOS.

@@ -10,6 +10,7 @@ use std::time::Duration;
 use serde_json::Value;
 
 use crate::mcp::{self, McpServerConfig};
+use crate::tools::decisions::normalize_words;
 use crate::tools::{local, system, FullAccess, Registry, ToolCall};
 
 /// Janela em que um "sim/não" falado vale como resposta a um pedido de
@@ -31,18 +32,21 @@ pub const TOOLS_PROMPT: &str = "Ferramentas: você pode agir no computador e nos
 sistemas do usuário com as ferramentas declaradas nesta sessão.\n\
 - Só chame uma ferramenta quando o usuário pedir uma ação ou uma informação que \
 dependa dela; em conversa comum, apenas converse.\n\
-- Antes de chamar, anuncie em uma frase curta o que vai fazer.\n\
-- Algumas ações pedem confirmação (comandos de terminal, escrever arquivos, \
-criar evento na agenda, criar ou alterar coisas no Overclock e no OverClick). \
-Nelas, diga em uma frase o que vai fazer, termine com 'confirma?' e chame a \
-ferramenta; o sistema segura a execução até o usuário dizer 'sim' ou 'não'. \
-Quando ele responder, NÃO chame a ferramenta de novo: o sistema já executa ou \
-cancela a chamada pendente e te envia o resultado. Ao ouvir o 'sim', diga só \
-'certo, executando' e espere o resultado chegar antes de dizer se deu certo.\n\
+- Pedido de ação: chame a ferramenta direto, sem anunciar o que vai fazer, sem \
+reformular o pedido e sem perguntar 'confirma?'. Quem pede confirmação, quando \
+precisa, é o app: ele segura a execução, pergunta ao usuário e te envia o \
+resultado. Nunca peça confirmação por conta própria.\n\
+- Se o usuário disser 'sim' ou 'não' a uma confirmação do app, NÃO chame a \
+ferramenta de novo: o app já executa ou cancela a chamada pendente e te envia \
+o resultado.\n\
+- Com o resultado em mãos, diga em uma frase curta o que aconteceu. Não releia \
+o comando, não anuncie passos, não repita instruções que já deu nesta conversa \
+nem a frase que acabou de dizer. Só detalhe se o usuário pedir. Nunca invente \
+um resultado que a ferramenta não devolveu.\n\
 - Se o resultado vier com erro, negado ou sem confirmação, diga isso em uma \
 frase e não tente de novo sem o usuário pedir.\n\
-- Com o resultado em mãos, resuma em uma frase o que aconteceu. Nunca invente \
-um resultado que a ferramenta não devolveu.\n\
+- Se o usuário disser 'sempre pode' ou 'não pergunta mais', o app grava a \
+permissão: responda só 'Certo, não pergunto mais.'\n\
 - Nunca leia em voz alta tokens, senhas, chaves, segredos nem endereços de \
 servidor, mesmo que apareçam num resultado.";
 
@@ -50,6 +54,24 @@ servidor, mesmo que apareçam num resultado.";
 pub const FULL_ACCESS_PROMPT: &str = "Modo acesso total ligado: nenhuma ação \
 pede confirmação e os arquivos podem estar em qualquer pasta do computador, \
 não só no home.";
+
+/// Uma fala repetida só descarta a partir deste número de palavras quando
+/// ainda está chegando (prefixo da anterior); igual por inteiro descarta
+/// sempre.
+const REPEAT_PREFIX_WORDS: usize = 6;
+
+/// A fala do modelo neste turno repete a do turno anterior? Compara
+/// normalizado (sem caixa, acento nem pontuação): igual por inteiro, ou, ainda
+/// chegando, um prefixo de pelo menos [`REPEAT_PREFIX_WORDS`] palavras.
+pub fn is_repeat(current: &str, previous: &str) -> bool {
+    let current = normalize_words(current);
+    let previous = normalize_words(previous);
+    if current.is_empty() || previous.is_empty() {
+        return false;
+    }
+    current == previous
+        || (current.len() >= REPEAT_PREFIX_WORDS && previous.starts_with(&current))
+}
 
 /// Resposta reconhecida numa fala durante a espera por confirmação.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -103,28 +125,6 @@ pub fn asks_confirmation(model_turn: &str) -> bool {
         .take(6)
         .any(|w| matches!(w.as_str(), "confirma" | "confirmar" | "posso" | "autoriza"))
         && model_turn.trim_end().ends_with('?')
-}
-
-/// Minúsculas, sem acento, quebrado em palavras alfanuméricas.
-fn normalize_words(text: &str) -> Vec<String> {
-    let folded: String = text
-        .chars()
-        .flat_map(char::to_lowercase)
-        .map(|c| match c {
-            'á' | 'à' | 'â' | 'ã' | 'ä' => 'a',
-            'é' | 'ê' | 'è' | 'ë' => 'e',
-            'í' | 'î' | 'ì' | 'ï' => 'i',
-            'ó' | 'ô' | 'õ' | 'ò' | 'ö' => 'o',
-            'ú' | 'û' | 'ù' | 'ü' => 'u',
-            'ç' => 'c',
-            other => other,
-        })
-        .collect();
-    folded
-        .split(|c: char| !c.is_alphanumeric())
-        .filter(|w| !w.is_empty())
-        .map(str::to_string)
-        .collect()
 }
 
 /// Registro de produção: locais + sistema + MCP, filtrado pelos globs do
@@ -295,6 +295,19 @@ mod tests {
     }
 
     #[test]
+    fn detects_repeated_model_speech() {
+        let previous = "Pronto, rodei o ls e listei os arquivos da sua pasta.";
+        assert!(is_repeat("pronto rodei o ls e listei os arquivos da sua pasta", previous));
+        assert!(is_repeat("Pronto, rodei o ls e listei", previous));
+        // Começo curto em comum não é repetição.
+        assert!(!is_repeat("Pronto, rodei", previous));
+        assert!(!is_repeat("Pronto, abri o Safari.", previous));
+        assert!(!is_repeat("", previous));
+        assert!(!is_repeat("Pronto.", ""));
+        assert!(is_repeat("Pronto.", "pronto"));
+    }
+
+    #[test]
     fn summaries_are_short_and_mask_secrets() {
         let call = ToolCall {
             id: "1".into(),
@@ -328,8 +341,9 @@ mod tests {
         assert!(!system_prompt_with_tools("base", true, false).contains(FULL_ACCESS_PROMPT));
         let with = system_prompt_with_tools("base", true, false);
         assert!(with.starts_with("base\n\n"));
-        assert!(with.contains("confirma?"));
+        assert!(with.contains("Nunca peça confirmação por conta própria"));
         assert!(with.contains("Nunca invente"));
+        assert!(with.contains("não pergunto mais"));
     }
 
     #[test]

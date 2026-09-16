@@ -9,6 +9,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { startDrag } from "@crabnebula/tauri-plugin-drag";
+import { renderAlwaysAllow } from "./always-allow";
 
 const VOICES = ["Puck", "Charon", "Kore", "Fenrir", "Aoede", "Leda", "Orus", "Zephyr"];
 
@@ -408,6 +409,7 @@ async function loadTools() {
   setFullAccessChecked(tools.full_access);
   overclockEnvPresent = tools.overclock_env_present;
   renderMcpServers(tools.mcp_servers);
+  await renderAlwaysAllow(fullAccessHint.parentElement ?? fullAccessHint, (message) => setStatus(message, "error"));
 }
 
 function fillVoices(current: string) {
