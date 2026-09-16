@@ -1,4 +1,5 @@
-//! `fs.read`, `fs.write` e `fs.list`: arquivos dentro do home do usuário.
+//! `fs.read`, `fs.write` e `fs.list`: arquivos dentro do home do usuário (ou
+//! em qualquer lugar, no modo acesso total).
 
 use std::path::PathBuf;
 
@@ -6,8 +7,8 @@ use async_trait::async_trait;
 use serde_json::json;
 use tokio::io::AsyncReadExt;
 
-use super::{resolve_in_root, str_arg};
-use crate::tools::{Risk, Tool, ToolError, ToolSpec};
+use super::{resolve_path, str_arg};
+use crate::tools::{FullAccess, Risk, Tool, ToolError, ToolSpec};
 
 /// Bytes lidos por padrão em `fs.read`.
 pub const READ_DEFAULT_BYTES: u64 = 64 * 1024;
@@ -22,11 +23,18 @@ fn io_error(path: &std::path::Path, e: std::io::Error) -> ToolError {
 
 pub struct FsRead {
     root: PathBuf,
+    full_access: FullAccess,
 }
 
 impl FsRead {
+    /// Preso a `root`.
     pub fn new(root: PathBuf) -> Self {
-        Self { root }
+        Self::with_full_access(root, FullAccess::default())
+    }
+
+    /// Preso a `root` enquanto `full_access` estiver desligado.
+    pub fn with_full_access(root: PathBuf, full_access: FullAccess) -> Self {
+        Self { root, full_access }
     }
 }
 
@@ -37,7 +45,7 @@ impl Tool for FsRead {
             name: "fs.read".into(),
             description: "Lê um arquivo de texto dentro da pasta home do usuário e devolve o \
                           conteúdo. Caminho relativo é a partir do home; \"~/\" também vale. \
-                          Arquivos grandes vêm truncados."
+                          Arquivos grandes vêm truncados. Fora do home só no modo acesso total."
                 .into(),
             parameters: json!({
                 "type": "object",
@@ -58,7 +66,7 @@ impl Tool for FsRead {
     }
 
     async fn call(&self, args: serde_json::Value) -> Result<serde_json::Value, ToolError> {
-        let path = resolve_in_root(&self.root, str_arg(&args, "path")?)?;
+        let path = resolve_path(&self.root, str_arg(&args, "path")?, !self.full_access.get())?;
         let max = args
             .get("max_bytes")
             .and_then(|v| v.as_u64())
@@ -101,11 +109,18 @@ fn text_without_cut_char(bytes: &[u8]) -> std::borrow::Cow<'_, str> {
 
 pub struct FsWrite {
     root: PathBuf,
+    full_access: FullAccess,
 }
 
 impl FsWrite {
+    /// Preso a `root`.
     pub fn new(root: PathBuf) -> Self {
-        Self { root }
+        Self::with_full_access(root, FullAccess::default())
+    }
+
+    /// Preso a `root` enquanto `full_access` estiver desligado.
+    pub fn with_full_access(root: PathBuf, full_access: FullAccess) -> Self {
+        Self { root, full_access }
     }
 }
 
@@ -116,7 +131,8 @@ impl Tool for FsWrite {
             name: "fs.write".into(),
             description: "Escreve texto num arquivo dentro da pasta home do usuário, criando o \
                           arquivo e as pastas que faltarem. Por padrão substitui o conteúdo; \
-                          com append=true acrescenta no fim. Pede confirmação antes."
+                          com append=true acrescenta no fim. Pede confirmação antes (exceto no \
+                          modo acesso total, que também libera caminhos fora do home)."
                 .into(),
             parameters: json!({
                 "type": "object",
@@ -141,7 +157,7 @@ impl Tool for FsWrite {
     }
 
     async fn call(&self, args: serde_json::Value) -> Result<serde_json::Value, ToolError> {
-        let path = resolve_in_root(&self.root, str_arg(&args, "path")?)?;
+        let path = resolve_path(&self.root, str_arg(&args, "path")?, !self.full_access.get())?;
         let content = str_arg(&args, "content")?;
         let append = args
             .get("append")
@@ -182,11 +198,18 @@ impl Tool for FsWrite {
 
 pub struct FsList {
     root: PathBuf,
+    full_access: FullAccess,
 }
 
 impl FsList {
+    /// Preso a `root`.
     pub fn new(root: PathBuf) -> Self {
-        Self { root }
+        Self::with_full_access(root, FullAccess::default())
+    }
+
+    /// Preso a `root` enquanto `full_access` estiver desligado.
+    pub fn with_full_access(root: PathBuf, full_access: FullAccess) -> Self {
+        Self { root, full_access }
     }
 }
 
@@ -196,7 +219,7 @@ impl Tool for FsList {
         ToolSpec {
             name: "fs.list".into(),
             description: "Lista o que tem numa pasta dentro do home do usuário: nome, tipo \
-                          (arquivo, pasta ou link) e tamanho. Sem caminho, lista o home."
+                          (arquivo, pasta ou link) e tamanho. Sem caminho, lista o home. Fora do home só no modo acesso total."
                 .into(),
             parameters: json!({
                 "type": "object",
@@ -214,7 +237,7 @@ impl Tool for FsList {
 
     async fn call(&self, args: serde_json::Value) -> Result<serde_json::Value, ToolError> {
         let raw = args.get("path").and_then(|v| v.as_str()).unwrap_or("");
-        let path = resolve_in_root(&self.root, raw)?;
+        let path = resolve_path(&self.root, raw, !self.full_access.get())?;
         let mut dir = tokio::fs::read_dir(&path)
             .await
             .map_err(|e| io_error(&path, e))?;
@@ -326,6 +349,46 @@ mod tests {
         assert!(
             matches!(l.call(json!({"path": "/"})).await, Err(ToolError::InvalidArgs(ref m)) if m.starts_with(OUTSIDE_HOME))
         );
+    }
+
+    #[tokio::test]
+    async fn fora_do_home_so_com_acesso_total() {
+        let tmp = TempDir::new();
+        let inside = tmp.0.join("dentro");
+        std::fs::create_dir(&inside).unwrap();
+        std::fs::write(tmp.0.join("vizinho.txt"), "vizinho").unwrap();
+        let outside = tmp.0.join("vizinho.txt");
+        let outside = outside.to_str().unwrap();
+
+        let flag = FullAccess::new(false);
+        let r = FsRead::with_full_access(inside.clone(), flag.clone());
+        let w = FsWrite::with_full_access(inside.clone(), flag.clone());
+        let l = FsList::with_full_access(inside, flag.clone());
+        assert!(matches!(
+            r.call(json!({"path": outside})).await,
+            Err(ToolError::InvalidArgs(ref m)) if m.starts_with(OUTSIDE_HOME)
+        ));
+
+        flag.set(true);
+        let read = r.call(json!({"path": outside})).await.unwrap();
+        assert_eq!(read["content"], "vizinho");
+        let read = r.call(json!({"path": "../vizinho.txt"})).await.unwrap();
+        assert_eq!(read["content"], "vizinho");
+        w.call(json!({"path": "../novo.txt", "content": "x"}))
+            .await
+            .unwrap();
+        assert!(tmp.0.join("novo.txt").exists());
+        let listed = l.call(json!({"path": ".."})).await.unwrap();
+        assert_eq!(listed["total"], 3);
+        // Caminho relativo continua partindo do home.
+        let listed = l.call(json!({})).await.unwrap();
+        assert_eq!(listed["total"], 0);
+
+        flag.set(false);
+        assert!(matches!(
+            l.call(json!({"path": ".."})).await,
+            Err(ToolError::InvalidArgs(ref m)) if m.starts_with(OUTSIDE_HOME)
+        ));
     }
 
     #[tokio::test]

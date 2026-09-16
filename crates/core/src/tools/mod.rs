@@ -7,12 +7,36 @@ pub mod policy;
 pub mod registry;
 pub mod system;
 
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 pub use policy::Policy;
 pub use registry::Registry;
+
+/// Modo acesso total, compartilhado entre a política e as ferramentas que
+/// mexem no disco: ligado, nada pede confirmação e `fs.*` aceita qualquer
+/// caminho. Clonar compartilha o mesmo valor, então ligar/desligar vale na
+/// hora, sem refazer o registro.
+#[derive(Debug, Clone, Default)]
+pub struct FullAccess(Arc<AtomicBool>);
+
+impl FullAccess {
+    pub fn new(on: bool) -> Self {
+        Self(Arc::new(AtomicBool::new(on)))
+    }
+
+    pub fn get(&self) -> bool {
+        self.0.load(Ordering::Relaxed)
+    }
+
+    pub fn set(&self, on: bool) {
+        self.0.store(on, Ordering::Relaxed);
+    }
+}
 
 /// Risco de uma ferramenta. `Confirm` pede "confirma?" antes de executar.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]

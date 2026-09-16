@@ -180,6 +180,22 @@
         .overlay-container.muted .state-dot,
         .overlay-container.error .state-dot { background: var(--color-coral); }
 
+        /* Selo "acesso total" (JRV-65): discreto, só enquanto o modo está ligado. */
+        .overlay-card { position: relative; }
+        .full-access-badge {
+            position: absolute;
+            top: 6px;
+            right: 12px;
+            font-size: 9px;
+            font-weight: 600;
+            letter-spacing: 0.04em;
+            text-transform: uppercase;
+            color: var(--color-coral);
+            opacity: 0.75;
+            pointer-events: none;
+        }
+        .full-access-badge[hidden] { display: none; }
+
         /* Última fala do usuário e do modelo, uma linha cada, com elipse */
         .lines {
             display: flex;
@@ -280,6 +296,7 @@
 <body>
     <div id="app" class="overlay-container">
         <div class="overlay-card">
+            <span id="full-access-badge" class="full-access-badge" hidden>acesso total</span>
             <div id="surreal-wrap" class="surreal-wrap" hidden></div>
             <div id="orb-wrap" class="orb-wrap">
                 <svg class="orb" viewBox="0 0 100 100" aria-hidden="true">

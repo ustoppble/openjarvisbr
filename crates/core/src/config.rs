@@ -66,6 +66,10 @@ struct FileConfig {
 pub struct ToolsSection {
     /// Liga/desliga todas as ferramentas. Ausente = ligadas.
     pub enabled: Option<bool>,
+    /// Modo acesso total: nada pede confirmação e `fs.*` sai do home.
+    /// Ausente = desligado.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub full_access: Option<bool>,
 }
 
 /// Globs de ferramentas para o motor: nenhum com `[tools].enabled = false`,
@@ -196,6 +200,8 @@ pub struct Settings {
     pub custom_profiles: Vec<Profile>,
     /// `[tools].enabled` (padrão ligado).
     pub tools_enabled: bool,
+    /// `[tools].full_access` (padrão desligado).
+    pub full_access: bool,
 }
 
 /// Estilo do overlay já resolvido: `surreal` (padrão) ou `orb`.
@@ -327,7 +333,8 @@ pub fn load_settings() -> Settings {
         mcp_servers: parsed.mcp_servers,
         profile: parsed.profile.filter(|s| !s.trim().is_empty()),
         custom_profiles: parsed.profiles,
-        tools_enabled: parsed.tools.and_then(|t| t.enabled).unwrap_or(true),
+        tools_enabled: parsed.tools.as_ref().and_then(|t| t.enabled).unwrap_or(true),
+        full_access: parsed.tools.and_then(|t| t.full_access).unwrap_or(false),
     }
 }
 
@@ -421,6 +428,30 @@ pub fn save_profile(id: &str) -> Result<(), ConfigError> {
         tools: existing.tools.clone(),
     };
     write_file_config(&path, &out)
+}
+
+/// Grava só `[tools].full_access`, preservando literalmente o resto do
+/// arquivo (inclusive seções que o core não modela).
+pub fn save_full_access(on: bool) -> Result<(), ConfigError> {
+    let path = config_path().ok_or(ConfigError::NoHome)?;
+    let mut table = std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|contents| contents.parse::<toml::Table>().ok())
+        .unwrap_or_default();
+    let tools = table
+        .entry("tools")
+        .or_insert_with(|| toml::Value::Table(toml::Table::new()));
+    if !tools.is_table() {
+        *tools = toml::Value::Table(toml::Table::new());
+    }
+    if let Some(tools) = tools.as_table_mut() {
+        tools.insert("full_access".to_string(), toml::Value::Boolean(on));
+    }
+    let contents = toml::to_string_pretty(&table).map_err(ConfigError::SerializeFile)?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|err| ConfigError::WriteFile(path.clone(), err))?;
+    }
+    std::fs::write(&path, contents).map_err(|err| ConfigError::WriteFile(path.clone(), err))
 }
 
 fn write_file_config(path: &PathBuf, out: &FileConfigOut) -> Result<(), ConfigError> {
@@ -521,6 +552,33 @@ mod tests {
             }
             let _ = std::fs::remove_dir_all(&self.dir);
         }
+    }
+
+    #[test]
+    fn full_access_defaults_off_and_round_trips_preserving_the_file() {
+        let _home = TempHome::new();
+        assert!(!load_settings().full_access);
+        let path = config_path().unwrap();
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &path,
+            "api_key = \"k\"\n[tools]\nenabled = false\n[[mcp_servers]]\nname = \"a\"\nurl = \"http://h/mcp\"\n",
+        )
+        .unwrap();
+        assert!(!load_settings().full_access);
+
+        save_full_access(true).unwrap();
+        let settings = load_settings();
+        assert!(settings.full_access);
+        assert!(!settings.tools_enabled);
+        assert_eq!(settings.mcp_servers.len(), 1);
+        assert_eq!(load_api_key().unwrap(), "k");
+
+        // `save` da janela de configurações preserva a seção [tools].
+        save(SaveSettings::default()).unwrap();
+        assert!(load_settings().full_access);
+        save_full_access(false).unwrap();
+        assert!(!load_settings().full_access);
     }
 
     #[test]

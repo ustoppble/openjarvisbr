@@ -74,7 +74,12 @@ pub async fn run(
                     let line = format!("[{}] {name}: {summary}", if ok { "ok" } else { "falhou" });
                     print_line(if ok { line.green() } else { line.red() });
                 }
-                Ok(EngineEvent::State(_) | EngineEvent::Level { .. } | EngineEvent::Reconnecting { .. }) => {}
+                Ok(
+                    EngineEvent::State(_)
+                    | EngineEvent::Level { .. }
+                    | EngineEvent::Reconnecting { .. }
+                    | EngineEvent::FullAccess(_),
+                ) => {}
                 Err(RecvError::Lagged(_)) => {}
                 Err(RecvError::Closed) => break 0,
             },

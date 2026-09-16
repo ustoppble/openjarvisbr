@@ -56,6 +56,7 @@ class OverlayManager {
     async initialize() {
         await this.initializeScene();
         await this.tools.initialize();
+        await this.initializeFullAccessBadge();
         this.listeners.push(
             await listen("engine://state", (event: any) => this.handleStateChange(event.payload))
         );
@@ -67,6 +68,23 @@ class OverlayManager {
         );
         this.listeners.push(
             await listen("engine://error", (event: any) => this.handleError(event.payload))
+        );
+    }
+
+    // Selo "acesso total" (JRV-65): estado inicial do config e depois o evento.
+    private async initializeFullAccessBadge() {
+        const badge = document.getElementById("full-access-badge") as HTMLElement | null;
+        if (!badge) return;
+        try {
+            const tools = await invoke<{ full_access: boolean }>("get_tools_settings");
+            badge.hidden = !tools.full_access;
+        } catch (err) {
+            console.error("[Overlay] Falha ao ler o modo acesso total", err);
+        }
+        this.listeners.push(
+            await listen("engine://full_access", (event: any) => {
+                badge.hidden = !event.payload?.on;
+            })
         );
     }
 

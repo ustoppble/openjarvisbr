@@ -66,6 +66,8 @@ const overlayStyleSelect = $<HTMLSelectElement>("overlay-style");
 const systemPromptTextarea = $<HTMLTextAreaElement>("system-prompt");
 const restorePromptButton = $<HTMLButtonElement>("restore-prompt");
 const toolsEnabledCheckbox = $<HTMLInputElement>("tools-enabled");
+const fullAccessCheckbox = $<HTMLInputElement>("full-access");
+const fullAccessHint = $<HTMLDivElement>("full-access-hint");
 const mcpList = $<HTMLUListElement>("mcp-list");
 const mcpEmpty = $<HTMLDivElement>("mcp-empty");
 const saveButton = $<HTMLButtonElement>("save");
@@ -131,6 +133,7 @@ interface McpServerInfo {
 
 interface ToolsSettingsPayload {
   enabled: boolean;
+  full_access: boolean;
   mcp_servers: McpServerInfo[];
   overclock_env_present: boolean;
 }
@@ -402,6 +405,7 @@ $<HTMLButtonElement>("mcp-save").addEventListener("click", async () => {
 async function loadTools() {
   const tools = await invoke<ToolsSettingsPayload>("get_tools_settings");
   toolsEnabledCheckbox.checked = tools.enabled;
+  setFullAccessChecked(tools.full_access);
   overclockEnvPresent = tools.overclock_env_present;
   renderMcpServers(tools.mcp_servers);
 }
@@ -534,6 +538,29 @@ saveButton.addEventListener("click", async () => {
     saveButton.disabled = false;
   }
 });
+
+// Acesso total (JRV-65): não espera o Salvar — grava e aplica no motor na hora.
+function setFullAccessChecked(on: boolean) {
+  fullAccessCheckbox.checked = on;
+  fullAccessHint.classList.toggle("error", on);
+}
+
+fullAccessCheckbox.addEventListener("change", async () => {
+  const on = fullAccessCheckbox.checked;
+  fullAccessCheckbox.disabled = true;
+  try {
+    await invoke("set_full_access", { on });
+    setFullAccessChecked(on);
+    setStatus(on ? "acesso total ligado" : "acesso total desligado", "ok");
+  } catch (err) {
+    setFullAccessChecked(!on);
+    setStatus(String(err), "error");
+  } finally {
+    fullAccessCheckbox.disabled = false;
+  }
+});
+
+void listen<{ on: boolean }>("engine://full_access", (event) => setFullAccessChecked(event.payload.on));
 
 load().catch((err) => setStatus(String(err), "error"));
 loadTools().catch((err) => setStatus(String(err), "error"));

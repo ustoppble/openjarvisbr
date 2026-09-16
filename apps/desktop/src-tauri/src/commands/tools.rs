@@ -77,6 +77,8 @@ pub fn set_overlay_tool_strip(app: AppHandle, visible: bool, interactive: bool) 
 #[derive(Debug, Serialize)]
 pub struct ToolsSettingsPayload {
     pub enabled: bool,
+    /// `[tools].full_access` (JRV-65).
+    pub full_access: bool,
     pub mcp_servers: Vec<tools_config::McpServerInfo>,
     /// Para o botão "Conectar Overclock": a env do token existe neste processo?
     pub overclock_env_present: bool,
@@ -90,9 +92,17 @@ const OVERCLOCK_BEARER_ENV: &str = "OVERCLOCK_MCP_BEARER_TOKEN";
 pub fn get_tools_settings() -> ToolsSettingsPayload {
     ToolsSettingsPayload {
         enabled: tools_config::tools_enabled(),
+        full_access: openjarvisbr_core::config::load_settings().full_access,
         mcp_servers: tools_config::mcp_servers(),
         overclock_env_present: tools_config::env_present(OVERCLOCK_BEARER_ENV),
     }
+}
+
+/// Toggle "Acesso total" da aba Ferramentas: grava e aplica na hora, sem
+/// reiniciar o motor (JRV-65).
+#[tauri::command]
+pub fn set_full_access(app: AppHandle, on: bool) -> Result<(), String> {
+    crate::apply_full_access(&app, on)
 }
 
 /// "Adicionar servidor": token digitado vai para o Keychain/Credential

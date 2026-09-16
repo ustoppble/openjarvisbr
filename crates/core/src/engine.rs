@@ -25,7 +25,7 @@ use crate::engine_tools::{self, VoiceAnswer};
 use crate::live::protocol::ServerEvent;
 use crate::live::session::{LiveConfig, LiveError, LiveSession};
 use crate::mcp::McpServerConfig;
-use crate::tools::{Policy, Registry, Risk, ToolCall, ToolError, ToolResult, ToolSpec};
+use crate::tools::{FullAccess, Policy, Registry, Risk, ToolCall, ToolError, ToolResult, ToolSpec};
 
 /// Capacidade do canal entre a thread de captura e o loop async.
 const CHANNEL_CAPACITY: usize = 64;
@@ -64,6 +64,9 @@ pub enum EngineEvent {
     Level { mic: f32, model: f32 },
     /// Reconexão em andamento (queda, goAway ou `reconnect()`).
     Reconnecting { attempt: u32 },
+    /// Modo acesso total: emitido ao subir (se ligado) e a cada mudança por
+    /// [`EngineHandle::set_full_access`].
+    FullAccess(bool),
     /// O modelo pediu uma ferramenta (já com o risco efetivo da política).
     ToolRequested { call: ToolCall, risk: Risk },
     /// Chamada `Confirm` segurada: aprovar com
@@ -132,6 +135,9 @@ pub struct EngineConfig {
     pub tools: Vec<String>,
     /// Servidores MCP cujas tools entram no registro (se algum glob alcança).
     pub mcp_servers: Vec<McpServerConfig>,
+    /// Acesso total: nada pede confirmação e `fs.*` sai do home. Muda ao vivo
+    /// com [`EngineHandle::set_full_access`].
+    pub full_access: bool,
 }
 
 impl std::fmt::Debug for EngineConfig {
@@ -146,6 +152,7 @@ impl std::fmt::Debug for EngineConfig {
             .field("fx_amount", &self.fx_amount)
             .field("greeting", &self.greeting)
             .field("tools", &self.tools)
+            .field("full_access", &self.full_access)
             .field(
                 "mcp_servers",
                 &self.mcp_servers.iter().map(|s| &s.name).collect::<Vec<_>>(),
@@ -156,7 +163,11 @@ impl std::fmt::Debug for EngineConfig {
 
 impl EngineConfig {
     fn live_config(&self, tools: &[ToolSpec]) -> LiveConfig {
-        let prompt = engine_tools::system_prompt_with_tools(&self.system_prompt, !tools.is_empty());
+        let prompt = engine_tools::system_prompt_with_tools(
+            &self.system_prompt,
+            !tools.is_empty(),
+            self.full_access,
+        );
         let mut cfg = LiveConfig::new(self.api_key.clone(), self.voice.clone())
             .with_system_prompt(prompt)
             .with_tools(tools.to_vec());
@@ -210,6 +221,7 @@ enum Command {
     Mute(bool),
     Reconnect,
     SetFxAmount(f32),
+    SetFullAccess(bool),
     ConfirmTool { id: String, approve: bool },
     Stop,
 }
@@ -239,6 +251,13 @@ impl EngineHandle {
     /// Ajusta o efeito de voz ao vivo (0..1).
     pub fn set_fx_amount(&self, amount: f32) {
         let _ = self.commands.send(Command::SetFxAmount(amount));
+    }
+
+    /// Liga/desliga o modo acesso total sem reconectar: vale a partir da
+    /// próxima chamada de ferramenta e é anunciado com
+    /// [`EngineEvent::FullAccess`].
+    pub fn set_full_access(&self, on: bool) {
+        let _ = self.commands.send(Command::SetFullAccess(on));
     }
 
     /// Responde a um [`EngineEvent::ToolConfirmNeeded`]. Id desconhecido (já
@@ -539,6 +558,7 @@ struct Worker {
     registry: Registry,
     tool_specs: Vec<ToolSpec>,
     policy: Policy,
+    full_access: FullAccess,
     timeouts: ToolTimeouts,
     confirms: Vec<PendingConfirm>,
     /// Ações `Confirm` aprovadas há pouco (nome, argumentos, quando): o modelo
@@ -569,16 +589,22 @@ impl Worker {
         last_error: Arc<Mutex<Option<LiveError>>>,
     ) -> Result<Worker, EngineError> {
         emit.send(EngineEvent::State(EngineState::Connecting));
+        let full_access = FullAccess::new(config.full_access);
+        if config.full_access {
+            emit.send(EngineEvent::FullAccess(true));
+        }
         let (registry, timeouts) = match &backend {
             Backend::Real => (
-                engine_tools::build_registry(&config.tools, &config.mcp_servers).await,
+                engine_tools::build_registry(&config.tools, &config.mcp_servers, &full_access)
+                    .await,
                 ToolTimeouts::default(),
             ),
             #[cfg(test)]
             Backend::Fake(fake) => (fake.registry.filter_for_profile(&config.tools), fake.timeouts),
             #[cfg(test)]
             Backend::LiveMic(_) => (
-                engine_tools::build_registry(&config.tools, &config.mcp_servers).await,
+                engine_tools::build_registry(&config.tools, &config.mcp_servers, &full_access)
+                    .await,
                 ToolTimeouts::default(),
             ),
         };
@@ -623,7 +649,8 @@ impl Worker {
         Ok(Worker {
             registry,
             tool_specs,
-            policy: Policy::new(),
+            policy: Policy::with_full_access(full_access.clone()),
+            full_access,
             timeouts,
             confirms: Vec::new(),
             approved: Vec::new(),
@@ -679,6 +706,7 @@ impl Worker {
                     }
                     Some(Command::ConfirmTool { id, approve }) => self.resolve_confirm(&id, approve, "botão"),
                     Some(Command::SetFxAmount(amount)) => self.voice_fx = VoiceFx::new(amount),
+                    Some(Command::SetFullAccess(on)) => self.set_full_access(on),
                     Some(Command::Reconnect) => {
                         if !self.reconnect().await {
                             break;
@@ -811,6 +839,17 @@ impl Worker {
                 self.fail(kind, message);
             }
         }
+    }
+
+    /// Troca o modo acesso total. A próxima reconexão já leva o prompt certo.
+    fn set_full_access(&mut self, on: bool) {
+        info!(acesso_total = on, "modo acesso total alterado");
+        self.full_access.set(on);
+        self.config.full_access = on;
+        if let Some(r) = self.recorder.as_mut() {
+            r.event("full_access", on.to_string());
+        }
+        self.emit.send(EngineEvent::FullAccess(on));
     }
 
     /// Aplica a política: `Safe` executa já; `Confirm` segura e pergunta.
@@ -1121,6 +1160,10 @@ impl Worker {
                     command = self.commands.recv() => match command {
                         Some(Command::Mute(muted)) => self.muted = muted,
                         Some(Command::SetFxAmount(amount)) => self.voice_fx = VoiceFx::new(amount),
+                        Some(Command::SetFullAccess(on)) => {
+                            self.full_access.set(on);
+                            self.emit.send(EngineEvent::FullAccess(on));
+                        }
                         Some(Command::Reconnect) | Some(Command::ConfirmTool { .. }) => {}
                         Some(Command::Stop) | None => break Connected::Stopped,
                     },
@@ -1368,6 +1411,7 @@ mod tests {
             greeting: None,
             tools: Vec::new(),
             mcp_servers: Vec::new(),
+            full_access: false,
         }
     }
 
@@ -1575,6 +1619,10 @@ mod tests {
         }
 
         async fn start_tools(globs: &[&str], confirm: Duration) -> Harness {
+            start_tools_with(globs, confirm, false).await
+        }
+
+        async fn start_tools_with(globs: &[&str], confirm: Duration, full_access: bool) -> Harness {
             let mut registry = Registry::new();
             registry.register(Box::new(Echo {
                 name: "app.open",
@@ -1597,6 +1645,7 @@ mod tests {
             );
             let mut config = test_config();
             config.tools = globs.iter().map(|g| g.to_string()).collect();
+            config.full_access = full_access;
             let handle = start_with(config, backend).await.expect("motor fake sobe");
             let events = handle.events();
             Harness {
@@ -1667,6 +1716,45 @@ mod tests {
                 }
                 other => panic!("esperava ToolResult, veio {other:?}"),
             }
+            h.handle.stop().await;
+        }
+
+        #[tokio::test]
+        async fn full_access_skips_confirmation_and_toggles_live() {
+            let mut h = start_tools_with(&["*"], Duration::from_secs(5), true).await;
+            h.script
+                .send(call("f1", "shell.run", json!({"command": "ls"})))
+                .await
+                .unwrap();
+            assert!(matches!(
+                next_tool_event(&mut h.events).await,
+                EngineEvent::ToolRequested { risk: Risk::Safe, .. }
+            ));
+            let result = next_response(&mut h.responses).await;
+            assert_eq!(result, ToolResult::ok("f1", json!({"command": "ls"})));
+            assert!(matches!(
+                next_tool_event(&mut h.events).await,
+                EngineEvent::ToolResult { ok: true, .. }
+            ));
+
+            h.handle.set_full_access(false);
+            loop {
+                if next_non_level(&mut h.events).await == EngineEvent::FullAccess(false) {
+                    break;
+                }
+            }
+            h.script
+                .send(call("f2", "shell.run", json!({"command": "ls"})))
+                .await
+                .unwrap();
+            assert!(matches!(
+                next_tool_event(&mut h.events).await,
+                EngineEvent::ToolRequested { risk: Risk::Confirm, .. }
+            ));
+            assert!(matches!(
+                next_tool_event(&mut h.events).await,
+                EngineEvent::ToolConfirmNeeded { .. }
+            ));
             h.handle.stop().await;
         }
 

@@ -10,7 +10,7 @@ use std::time::Duration;
 use serde_json::Value;
 
 use crate::mcp::{self, McpServerConfig};
-use crate::tools::{local, system, Registry, ToolCall};
+use crate::tools::{local, system, FullAccess, Registry, ToolCall};
 
 /// Janela em que um "sim/não" falado vale como resposta a um pedido de
 /// confirmação.
@@ -45,6 +45,11 @@ frase e não tente de novo sem o usuário pedir.\n\
 um resultado que a ferramenta não devolveu.\n\
 - Nunca leia em voz alta tokens, senhas, chaves, segredos nem endereços de \
 servidor, mesmo que apareçam num resultado.";
+
+/// Anexado ao prompt de ferramentas quando a sessão abre em acesso total.
+pub const FULL_ACCESS_PROMPT: &str = "Modo acesso total ligado: nenhuma ação \
+pede confirmação e os arquivos podem estar em qualquer pasta do computador, \
+não só no home.";
 
 /// Resposta reconhecida numa fala durante a espera por confirmação.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -124,12 +129,16 @@ fn normalize_words(text: &str) -> Vec<String> {
 
 /// Registro de produção: locais + sistema + MCP, filtrado pelos globs do
 /// perfil. Globs vazios = nenhuma ferramenta (e nenhum MCP é contatado).
-pub async fn build_registry(globs: &[String], mcp_servers: &[McpServerConfig]) -> Registry {
+pub async fn build_registry(
+    globs: &[String],
+    mcp_servers: &[McpServerConfig],
+    full_access: &FullAccess,
+) -> Registry {
     if globs.is_empty() {
         return Registry::new();
     }
     let mut registry = Registry::new();
-    for tool in local::all().into_iter().chain(system::all()) {
+    for tool in local::all(full_access.clone()).into_iter().chain(system::all()) {
         registry.register(tool);
     }
     // Servidor MCP que nenhum glob do perfil alcança nem é contatado.
@@ -235,14 +244,19 @@ fn truncate(text: &str, max: usize) -> String {
 }
 
 /// System prompt com a seção de ferramentas, quando há alguma liberada.
-pub fn system_prompt_with_tools(prompt: &str, has_tools: bool) -> String {
+pub fn system_prompt_with_tools(prompt: &str, has_tools: bool, full_access: bool) -> String {
     if !has_tools {
         return prompt.to_string();
     }
+    let tools = if full_access {
+        format!("{TOOLS_PROMPT}\n{FULL_ACCESS_PROMPT}")
+    } else {
+        TOOLS_PROMPT.to_string()
+    };
     if prompt.trim().is_empty() {
-        return TOOLS_PROMPT.to_string();
+        return tools;
     }
-    format!("{prompt}\n\n{TOOLS_PROMPT}")
+    format!("{prompt}\n\n{tools}")
 }
 
 #[cfg(test)]
@@ -308,8 +322,11 @@ mod tests {
 
     #[test]
     fn prompt_section_only_with_tools() {
-        assert_eq!(system_prompt_with_tools("base", false), "base");
-        let with = system_prompt_with_tools("base", true);
+        assert_eq!(system_prompt_with_tools("base", false, false), "base");
+        assert_eq!(system_prompt_with_tools("base", false, true), "base");
+        assert!(system_prompt_with_tools("base", true, true).ends_with(FULL_ACCESS_PROMPT));
+        assert!(!system_prompt_with_tools("base", true, false).contains(FULL_ACCESS_PROMPT));
+        let with = system_prompt_with_tools("base", true, false);
         assert!(with.starts_with("base\n\n"));
         assert!(with.contains("confirma?"));
         assert!(with.contains("Nunca invente"));
@@ -330,8 +347,8 @@ mod tests {
 
     #[tokio::test]
     async fn empty_globs_build_empty_registry() {
-        assert!(build_registry(&[], &[]).await.is_empty());
-        let code = build_registry(&["fs.*".to_string()], &[]).await;
+        assert!(build_registry(&[], &[], &FullAccess::default()).await.is_empty());
+        let code = build_registry(&["fs.*".to_string()], &[], &FullAccess::default()).await;
         assert_eq!(code.names(), ["fs.list", "fs.read", "fs.write"]);
     }
 }

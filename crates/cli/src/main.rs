@@ -42,6 +42,11 @@ struct Cli {
     #[arg(long, value_name = "ID")]
     profile: Option<String>,
 
+    /// Acesso total: nenhuma ferramenta pede confirmação e os arquivos podem
+    /// estar fora do home. Também liga com [tools].full_access no config.toml
+    #[arg(long)]
+    full_access: bool,
+
     /// Lista os perfis disponíveis (embutidos + os do config.toml) e sai
     #[arg(long)]
     list_profiles: bool,
@@ -147,7 +152,11 @@ fn main() {
         greeting: None,
         tools: config::effective_tool_globs(&settings),
         mcp_servers: settings.mcp_servers.clone(),
+        full_access: cli.full_access || settings.full_access,
     };
+    if engine_config.full_access {
+        eprintln!("⚠ acesso total ligado: o Jarvis executa comandos e mexe em arquivos sem perguntar");
+    }
     let barge_in = engine_config.barge_in;
     let fx_amount = engine_config.fx_amount.clamp(0.0, 1.0);
     let record_dir = engine_config.record_dir.clone();

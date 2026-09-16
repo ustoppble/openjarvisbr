@@ -5,7 +5,7 @@
 
 use std::path::{Component, Path, PathBuf};
 
-use super::{Tool, ToolError};
+use super::{FullAccess, Tool, ToolError};
 
 mod app;
 mod fs;
@@ -17,16 +17,18 @@ pub use fs::{FsList, FsRead, FsWrite};
 pub use shell::ShellRun;
 pub use web::WebOpen;
 
-/// Todas as ferramentas locais, presas ao home do usuário.
-pub fn all() -> Vec<Box<dyn Tool>> {
+/// Todas as ferramentas locais. `fs.*` ficam presas ao home do usuário
+/// enquanto `full_access` estiver desligado; `shell.run` roda no home e não
+/// tem restrição de caminho (a confirmação dele é da política).
+pub fn all(full_access: FullAccess) -> Vec<Box<dyn Tool>> {
     let home = home_dir();
     vec![
         Box::new(AppOpen),
         Box::new(WebOpen),
         Box::new(ShellRun::new(home.clone())),
-        Box::new(FsRead::new(home.clone())),
-        Box::new(FsWrite::new(home.clone())),
-        Box::new(FsList::new(home)),
+        Box::new(FsRead::with_full_access(home.clone(), full_access.clone())),
+        Box::new(FsWrite::with_full_access(home.clone(), full_access.clone())),
+        Box::new(FsList::with_full_access(home, full_access)),
     ]
 }
 
@@ -55,7 +57,14 @@ pub(crate) const OUTSIDE_HOME: &str = "só posso mexer dentro da pasta home";
 /// existe é canonicalizado (resolve symlinks); o que ainda não existe (arquivo
 /// a criar) não pode conter `..`. O caminho final precisa começar pela raiz
 /// canonicalizada.
+#[cfg(test)]
 pub(crate) fn resolve_in_root(root: &Path, input: &str) -> Result<PathBuf, ToolError> {
+    resolve_path(root, input, true)
+}
+
+/// Como [`resolve_in_root`]; com `confined = false` (acesso total) o caminho
+/// final pode ficar fora da raiz. Relativos e `~` continuam partindo dela.
+pub(crate) fn resolve_path(root: &Path, input: &str, confined: bool) -> Result<PathBuf, ToolError> {
     let root = root
         .canonicalize()
         .map_err(|_| ToolError::Failed("pasta home não encontrada".into()))?;
@@ -99,7 +108,7 @@ pub(crate) fn resolve_in_root(root: &Path, input: &str) -> Result<PathBuf, ToolE
     for name in pending.into_iter().rev() {
         resolved.push(name);
     }
-    if !resolved.starts_with(&root) {
+    if confined && !resolved.starts_with(&root) {
         return Err(ToolError::InvalidArgs(format!(
             "{OUTSIDE_HOME}: \"{input}\""
         )));
@@ -188,7 +197,7 @@ mod tests {
 
     #[test]
     fn all_tem_os_seis_nomes_e_riscos() {
-        let specs: Vec<_> = all().iter().map(|t| t.spec()).collect();
+        let specs: Vec<_> = all(FullAccess::default()).iter().map(|t| t.spec()).collect();
         let names: Vec<_> = specs.iter().map(|s| s.name.as_str()).collect();
         assert_eq!(
             names,

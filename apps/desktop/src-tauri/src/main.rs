@@ -31,7 +31,7 @@ use commands::permissions::{
 };
 use commands::tools::{
     add_mcp_server, confirm_tool, emit_tool_mock, get_tools_settings, open_tools_link,
-    remove_mcp_server, set_overlay_tool_strip, test_mcp_server,
+    remove_mcp_server, set_full_access, set_overlay_tool_strip, test_mcp_server,
 };
 use errors::{handle_engine_error, take_pending_error};
 
@@ -50,6 +50,8 @@ pub(crate) struct AppState {
     profile_items: Mutex<Vec<(String, CheckMenuItem<tauri::Wry>)>>,
     /// Item "Ferramentas: ligadas/desligadas" (JRV-58).
     tools_item: Mutex<Option<MenuItem<tauri::Wry>>>,
+    /// Item marcável "Acesso total (sem confirmação)" (JRV-65).
+    full_access_item: Mutex<Option<CheckMenuItem<tauri::Wry>>>,
     muted: AtomicBool,
     /// Erro esperando a janela de configurações carregar e consumir via
     /// `take_pending_error` (ver `errors.rs`).
@@ -151,6 +153,45 @@ fn toggle_tools(app: &AppHandle) {
     }
     set_tools_label(app, next);
     tauri::async_runtime::spawn(restart_engine(app.clone()));
+}
+
+/// Evento do overlay/configurações quando o modo acesso total muda.
+pub(crate) const FULL_ACCESS_EVENT: &str = "engine://full_access";
+
+/// Marca o item da bandeja e avisa as janelas do modo acesso total.
+pub(crate) fn sync_full_access(app: &AppHandle, on: bool) {
+    let handle = app.clone();
+    let _ = app.run_on_main_thread(move || {
+        let state = handle.state::<AppState>();
+        let guard = state.full_access_item.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(item) = guard.as_ref() {
+            let _ = item.set_checked(on);
+        }
+    });
+    let _ = app.emit(FULL_ACCESS_EVENT, serde_json::json!({ "on": on }));
+}
+
+/// Liga/desliga o acesso total: grava `[tools].full_access` e aplica no
+/// motor em andamento, sem reiniciar. Sem motor, só sincroniza a interface.
+pub(crate) fn apply_full_access(app: &AppHandle, on: bool) -> Result<(), String> {
+    openjarvisbr_core::config::save_full_access(on).map_err(|err| err.to_string())?;
+    tracing::info!(acesso_total = on, "modo acesso total alterado");
+    let state = app.state::<AppState>();
+    let guard = state.engine.lock().unwrap_or_else(|e| e.into_inner());
+    match guard.as_ref() {
+        // O motor responde com `EngineEvent::FullAccess`, que sincroniza.
+        Some(engine) => engine.set_full_access(on),
+        None => sync_full_access(app, on),
+    }
+    Ok(())
+}
+
+fn toggle_full_access(app: &AppHandle) {
+    let next = !load_settings().full_access;
+    if let Err(err) = apply_full_access(app, next) {
+        tracing::warn!(erro = %err, "não foi possível salvar [tools].full_access");
+        sync_full_access(app, !next);
+    }
 }
 
 fn apply_mute(app: &AppHandle, muted: bool) {
@@ -316,6 +357,7 @@ fn handle_menu_event(app: &AppHandle, id: &str) {
         "mute" => toggle_mute(app),
         "reconnect" => do_reconnect(app),
         "tools" => toggle_tools(app),
+        "full_access" => toggle_full_access(app),
         "settings" => open_settings_window(app),
         "quit" => app.exit(0),
         _ => {}
@@ -353,6 +395,7 @@ fn handle_engine_event(app: &AppHandle, event: EngineEvent) {
                 serde_json::json!({ "state": "connecting", "reconnecting": true, "attempt": attempt }),
             );
         }
+        EngineEvent::FullAccess(on) => sync_full_access(app, on),
         event @ (EngineEvent::ToolRequested { .. }
         | EngineEvent::ToolConfirmNeeded { .. }
         | EngineEvent::ToolResult { .. }) => tool_events::emit(app, &event),
@@ -397,6 +440,7 @@ fn build_engine_config(api_key: String, greeting: Option<String>) -> EngineConfi
         greeting,
         tools,
         mcp_servers: settings.mcp_servers,
+        full_access: settings.full_access,
     }
 }
 
@@ -506,6 +550,7 @@ fn main() {
             mute_item: Mutex::new(None),
             profile_items: Mutex::new(Vec::new()),
             tools_item: Mutex::new(None),
+            full_access_item: Mutex::new(None),
             muted: AtomicBool::new(false),
             pending_error: Mutex::new(None),
         })
@@ -521,6 +566,7 @@ fn main() {
             confirm_tool,
             set_overlay_tool_strip,
             get_tools_settings,
+            set_full_access,
             add_mcp_server,
             remove_mcp_server,
             test_mcp_server,
@@ -570,6 +616,14 @@ fn main() {
                 true,
                 None::<&str>,
             )?;
+            let full_access_item = CheckMenuItem::with_id(
+                app,
+                "full_access",
+                "Acesso total (sem confirmação)",
+                true,
+                settings_at_startup.full_access,
+                None::<&str>,
+            )?;
             let settings_item = MenuItem::with_id(app, "settings", "Configurações", true, None::<&str>)?;
             let quit_item = MenuItem::with_id(app, "quit", "Sair", true, None::<&str>)?;
             let menu = Menu::with_items(
@@ -578,6 +632,7 @@ fn main() {
                     &mute_item,
                     &reconnect_item,
                     &tools_item,
+                    &full_access_item,
                     &profile_submenu,
                     &settings_item,
                     &quit_item,
@@ -589,6 +644,7 @@ fn main() {
                 *state.mute_item.lock().unwrap_or_else(|e| e.into_inner()) = Some(mute_item);
                 *state.profile_items.lock().unwrap_or_else(|e| e.into_inner()) = profile_items;
                 *state.tools_item.lock().unwrap_or_else(|e| e.into_inner()) = Some(tools_item);
+                *state.full_access_item.lock().unwrap_or_else(|e| e.into_inner()) = Some(full_access_item);
             }
 
             let _tray = TrayIconBuilder::with_id(TRAY_ID)

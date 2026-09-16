@@ -1,7 +1,7 @@
 //! Política de risco: decide se uma ferramenta executa direto (`Safe`) ou
 //! pede confirmação (`Confirm`).
 
-use super::{Risk, ToolSpec};
+use super::{FullAccess, Risk, ToolSpec};
 
 /// Verbos que só leem. Um tool MCP cujo nome traz um deles (e nenhum verbo de
 /// escrita) é `Safe`.
@@ -14,17 +14,28 @@ const WRITE_VERBS: &[&str] = &[
     "patch", "edit", "add", "start", "stop",
 ];
 
-#[derive(Debug, Clone, Copy, Default)]
-pub struct Policy;
+#[derive(Debug, Clone, Default)]
+pub struct Policy {
+    full_access: FullAccess,
+}
 
 impl Policy {
     pub fn new() -> Self {
-        Self
+        Self::default()
     }
 
-    /// Risco efetivo de uma spec. Tools `mcp.<server>.<tool>` usam a
-    /// heurística por nome; as demais mantêm o risco declarado.
+    /// Política que segue o modo acesso total (ligado = tudo `Safe`).
+    pub fn with_full_access(full_access: FullAccess) -> Self {
+        Self { full_access }
+    }
+
+    /// Risco efetivo de uma spec. Em acesso total tudo é `Safe`; fora dele,
+    /// tools `mcp.<server>.<tool>` usam a heurística por nome e as demais
+    /// mantêm o risco declarado.
     pub fn risk(&self, spec: &ToolSpec) -> Risk {
+        if self.full_access.get() {
+            return Risk::Safe;
+        }
         match mcp_tool_name(&spec.name) {
             Some(tool) => mcp_risk(tool),
             None => spec.risk,
@@ -158,6 +169,26 @@ mod tests {
             policy.risk(&spec("mcpx.a.list", Risk::Confirm)),
             Risk::Confirm
         );
+    }
+
+    #[test]
+    fn full_access_makes_everything_safe_and_follows_the_toggle() {
+        let flag = FullAccess::new(true);
+        let policy = Policy::with_full_access(flag.clone());
+        for (name, risk) in [
+            ("shell.run", Risk::Confirm),
+            ("fs.write", Risk::Confirm),
+            ("mcp.overclick.task_delete", Risk::Confirm),
+            ("fs.read", Risk::Safe),
+        ] {
+            assert_eq!(policy.risk(&spec(name, risk)), Risk::Safe, "{name}");
+        }
+        flag.set(false);
+        assert_eq!(
+            policy.risk(&spec("shell.run", Risk::Confirm)),
+            Risk::Confirm
+        );
+        assert!(policy.needs_confirmation(&spec("mcp.overclick.task_delete", Risk::Safe)));
     }
 
     #[test]
