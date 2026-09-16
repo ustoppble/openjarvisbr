@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>NSMicrophoneUsageDescription</key>
+  <string>O OpenJarvisBR usa o microfone para ouvir você e conversar por voz.</string>
+  <key>NSAppleEventsUsageDescription</key>
+  <string>O OpenJarvisBR controla outros apps (abrir aplicativos, mídia, volume) quando você pede por voz.</string>
+  <key>NSCalendarsUsageDescription</key>
+  <string>O OpenJarvisBR cria eventos no Calendário quando você pede por voz.</string>
+  <key>NSRemindersUsageDescription</key>
+  <string>O OpenJarvisBR cria lembretes quando você pede por voz.</string>
+</dict>
+</plist>
