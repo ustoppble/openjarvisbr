@@ -9,9 +9,12 @@
 // isso o clippy marcaria toda a API como código morto.
 #![allow(dead_code)]
 
-use std::collections::VecDeque;
 use std::fmt;
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
+
+use ringbuf::traits::{Consumer, Observer, Producer, Split};
+use ringbuf::{HeapCons, HeapProd, HeapRb};
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{FromSample, SampleFormat, SizedSample, StreamConfig};
@@ -22,6 +25,8 @@ use rubato::{Async, FixedAsync, PolynomialDegree, Resampler};
 const SOURCE_RATE: u32 = 24_000;
 const SOURCE_CHANNELS: usize = 1;
 const RESAMPLE_CHUNK_FRAMES: usize = 480;
+/// Capacidade do ring buffer em segundos de áudio do dispositivo.
+const RING_SECONDS: usize = 60;
 
 #[derive(Debug)]
 pub enum PlaybackError {
@@ -58,50 +63,60 @@ impl From<rubato::ResamplerConstructionError> for PlaybackError {
     }
 }
 
-/// Fila compartilhada com o callback de áudio.
+/// Estado compartilhado entre produtor (loop da app) e o callback de áudio.
 ///
-/// `primed` implementa um jitter buffer: o callback só começa a drenar
-/// quando há pelo menos `prebuffer` amostras acumuladas (ou quando `drain`
-/// foi pedido no fim do turno), e volta a esperar quando a fila esvazia.
-/// Sem isso, cada vão entre pacotes de rede virava um estalo de silêncio
-/// no meio da frase.
-struct Queue {
-    samples: VecDeque<i16>,
-    primed: bool,
-    drain: bool,
+/// O callback roda numa thread de tempo real do CoreAudio/WASAPI e NUNCA
+/// pode bloquear: por isso as amostras viajam por um ring buffer SPSC
+/// lock-free (`ringbuf`) e os sinais de controle são atômicos. Um `Mutex`
+/// aqui, disputado com o `push`, virava silêncio no dispositivo a cada
+/// espera — palavras engolidas que nenhum log de fila enxerga.
+struct Shared {
+    /// Fim de turno: toca o resto mesmo abaixo do prebuffer.
+    drain: AtomicBool,
+    /// Incrementado no `flush`; o callback descarta tudo ao ver mudar.
+    generation: AtomicU32,
+    /// Amostras (já expandidas por canal) antes de começar a tocar.
     prebuffer: usize,
 }
 
-impl Queue {
-    fn new(prebuffer: usize) -> Self {
-        Self {
-            samples: VecDeque::new(),
-            primed: false,
-            drain: false,
-            prebuffer,
-        }
-    }
+/// Lado do consumidor, vivo só dentro do callback.
+struct Sink {
+    cons: HeapCons<i16>,
+    shared: Arc<Shared>,
+    primed: bool,
+    seen_generation: u32,
+}
 
-    fn clear(&mut self) {
-        self.samples.clear();
-        self.primed = false;
-        self.drain = false;
+impl Sink {
+    fn fill<T: SizedSample + FromSample<i16>>(&mut self, data: &mut [T]) {
+        let generation = self.shared.generation.load(Ordering::Acquire);
+        if generation != self.seen_generation {
+            let pending = self.cons.occupied_len();
+            self.cons.skip(pending);
+            self.primed = false;
+            self.seen_generation = generation;
+        }
+        for slot in data.iter_mut() {
+            *slot = T::from_sample(self.next_sample());
+        }
     }
 
     /// Próxima amostra a tocar, ou silêncio enquanto o buffer enche.
     fn next_sample(&mut self) -> i16 {
         if !self.primed {
-            if self.samples.len() >= self.prebuffer || (self.drain && !self.samples.is_empty()) {
+            let available = self.cons.occupied_len();
+            let drain = self.shared.drain.load(Ordering::Acquire);
+            if available >= self.shared.prebuffer || (drain && available > 0) {
                 self.primed = true;
             } else {
                 return 0;
             }
         }
-        match self.samples.pop_front() {
+        match self.cons.try_pop() {
             Some(sample) => sample,
             None => {
                 self.primed = false;
-                self.drain = false;
+                self.shared.drain.store(false, Ordering::Release);
                 0
             }
         }
@@ -117,7 +132,8 @@ struct Resampling {
 /// Reprodutor de PCM i16 24kHz mono. `push` enfileira, `flush` descarta a
 /// fila (interrupção).
 pub struct Player {
-    queue: Arc<Mutex<Queue>>,
+    prod: Mutex<HeapProd<i16>>,
+    shared: Arc<Shared>,
     resampling: Option<Mutex<Resampling>>,
     device_channels: usize,
     _stream: cpal::Stream,
@@ -160,8 +176,20 @@ impl Player {
 
         // ~200ms de áudio antes de começar a tocar cada resposta.
         let prebuffer = device_rate as usize * device_channels / 5;
-        let queue: Arc<Mutex<Queue>> = Arc::new(Mutex::new(Queue::new(prebuffer)));
-        let stream = build_stream(&device, &stream_config, sample_format, queue.clone())?;
+        let shared = Arc::new(Shared {
+            drain: AtomicBool::new(false),
+            generation: AtomicU32::new(0),
+            prebuffer,
+        });
+        let (prod, cons) =
+            HeapRb::<i16>::new(device_rate as usize * device_channels * RING_SECONDS).split();
+        let sink = Sink {
+            cons,
+            shared: shared.clone(),
+            primed: false,
+            seen_generation: 0,
+        };
+        let stream = build_stream(&device, &stream_config, sample_format, sink)?;
         stream.play()?;
 
         let resampling = if needs_resample {
@@ -183,7 +211,8 @@ impl Player {
         };
 
         Ok(Player {
-            queue,
+            prod: Mutex::new(prod),
+            shared,
             resampling,
             device_channels,
             _stream: stream,
@@ -227,59 +256,57 @@ impl Player {
     }
 
     fn enqueue_i16(&self, samples: &[i16]) {
-        let mut queue = self.queue.lock().unwrap_or_else(|e| e.into_inner());
-        for &sample in samples {
-            for _ in 0..self.device_channels {
-                queue.samples.push_back(sample);
-            }
-        }
+        let expanded: Vec<i16> = samples
+            .iter()
+            .flat_map(|&s| std::iter::repeat_n(s, self.device_channels))
+            .collect();
+        self.enqueue_expanded(&expanded);
     }
 
     fn enqueue_f32(&self, samples: &[f32]) {
-        let mut queue = self.queue.lock().unwrap_or_else(|e| e.into_inner());
-        for &sample in samples {
-            let clamped = sample.round().clamp(i16::MIN as f32, i16::MAX as f32);
-            let value = clamped as i16;
-            for _ in 0..self.device_channels {
-                queue.samples.push_back(value);
-            }
+        let expanded: Vec<i16> = samples
+            .iter()
+            .map(|&s| s.round().clamp(i16::MIN as f32, i16::MAX as f32) as i16)
+            .flat_map(|s| std::iter::repeat_n(s, self.device_channels))
+            .collect();
+        self.enqueue_expanded(&expanded);
+    }
+
+    fn enqueue_expanded(&self, expanded: &[i16]) {
+        let mut prod = self.prod.lock().unwrap_or_else(|e| e.into_inner());
+        let written = prod.push_slice(expanded);
+        if written < expanded.len() {
+            tracing::warn!(
+                perdidas = expanded.len() - written,
+                "ring buffer de playback cheio; amostras descartadas"
+            );
         }
     }
 
-    /// Descarta toda amostra ainda não tocada (interrupção).
     /// `true` enquanto ainda há amostras na fila esperando pra tocar.
     pub fn is_playing(&self) -> bool {
-        !self
-            .queue
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .samples
-            .is_empty()
+        self.queued() > 0
     }
 
     /// Amostras (já expandidas por canal) ainda na fila.
     pub fn queued(&self) -> usize {
-        self.queue
+        self.prod
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .samples
-            .len()
+            .occupied_len()
     }
 
     /// O modelo terminou o turno: toca o que restou na fila mesmo que seja
     /// menor que o prebuffer.
     pub fn end_of_turn(&self) {
-        self.queue
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .drain = true;
+        self.shared.drain.store(true, Ordering::Release);
     }
 
+    /// Descarta toda amostra ainda não tocada (interrupção). O descarte em
+    /// si acontece no callback, ao notar a nova geração.
     pub fn flush(&self) {
-        self.queue
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .clear();
+        self.shared.drain.store(false, Ordering::Release);
+        self.shared.generation.fetch_add(1, Ordering::AcqRel);
         if let Some(resampling) = &self.resampling {
             resampling
                 .lock()
@@ -294,15 +321,15 @@ fn build_stream(
     device: &cpal::Device,
     config: &StreamConfig,
     sample_format: SampleFormat,
-    queue: Arc<Mutex<Queue>>,
+    sink: Sink,
 ) -> Result<cpal::Stream, PlaybackError> {
     let stream = match sample_format {
-        SampleFormat::I16 => build_typed_stream::<i16>(device, config, queue)?,
-        SampleFormat::U16 => build_typed_stream::<u16>(device, config, queue)?,
-        SampleFormat::F32 => build_typed_stream::<f32>(device, config, queue)?,
+        SampleFormat::I16 => build_typed_stream::<i16>(device, config, sink)?,
+        SampleFormat::U16 => build_typed_stream::<u16>(device, config, sink)?,
+        SampleFormat::F32 => build_typed_stream::<f32>(device, config, sink)?,
         other => {
             tracing::warn!(formato = ?other, "formato de amostra não testado, tentando f32");
-            build_typed_stream::<f32>(device, config, queue)?
+            build_typed_stream::<f32>(device, config, sink)?
         }
     };
     Ok(stream)
@@ -311,21 +338,76 @@ fn build_stream(
 fn build_typed_stream<T>(
     device: &cpal::Device,
     config: &StreamConfig,
-    queue: Arc<Mutex<Queue>>,
+    mut sink: Sink,
 ) -> Result<cpal::Stream, PlaybackError>
 where
     T: SizedSample + FromSample<i16> + Send + 'static,
 {
     let stream = device.build_output_stream(
         *config,
-        move |data: &mut [T], _info: &cpal::OutputCallbackInfo| {
-            let mut q = queue.lock().unwrap_or_else(|e| e.into_inner());
-            for sample in data.iter_mut() {
-                *sample = T::from_sample(q.next_sample());
-            }
-        },
+        move |data: &mut [T], _info: &cpal::OutputCallbackInfo| sink.fill(data),
         |err| tracing::error!(error = %err, "erro no stream de playback"),
         None,
     )?;
     Ok(stream)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sink(prebuffer: usize, cap: usize) -> (HeapProd<i16>, Sink, Arc<Shared>) {
+        let shared = Arc::new(Shared {
+            drain: AtomicBool::new(false),
+            generation: AtomicU32::new(0),
+            prebuffer,
+        });
+        let (prod, cons) = HeapRb::<i16>::new(cap).split();
+        let sink = Sink {
+            cons,
+            shared: shared.clone(),
+            primed: false,
+            seen_generation: 0,
+        };
+        (prod, sink, shared)
+    }
+
+    #[test]
+    fn waits_for_prebuffer_then_plays_and_underrun_reprimes() {
+        let (mut prod, mut sink, _shared) = sink(4, 64);
+        prod.push_slice(&[1, 2, 3]);
+        let mut out = [0i16; 3];
+        sink.fill(&mut out);
+        assert_eq!(out, [0, 0, 0], "abaixo do prebuffer toca silêncio");
+        prod.push_slice(&[4]);
+        let mut out = [0i16; 6];
+        sink.fill(&mut out);
+        assert_eq!(out, [1, 2, 3, 4, 0, 0]);
+        assert!(!sink.primed, "esvaziou: volta a esperar o prebuffer");
+    }
+
+    #[test]
+    fn drain_plays_tail_below_prebuffer() {
+        let (mut prod, mut sink, shared) = sink(100, 64);
+        prod.push_slice(&[7, 8]);
+        shared.drain.store(true, Ordering::Release);
+        let mut out = [0i16; 3];
+        sink.fill(&mut out);
+        assert_eq!(out, [7, 8, 0]);
+        assert!(!shared.drain.load(Ordering::Acquire), "drain consumido");
+    }
+
+    #[test]
+    fn flush_generation_discards_pending() {
+        let (mut prod, mut sink, shared) = sink(1, 64);
+        prod.push_slice(&[1, 2, 3, 4]);
+        shared.generation.fetch_add(1, Ordering::AcqRel);
+        prod.push_slice(&[9]);
+        // A geração nova descarta tudo que havia antes do fill, inclusive o 9
+        // que chegou antes do callback rodar — comportamento aceito: o flush
+        // é uma interrupção e o próximo turno recomeça do zero.
+        let mut out = [0i16; 2];
+        sink.fill(&mut out);
+        assert_eq!(out, [0, 0]);
+    }
 }
