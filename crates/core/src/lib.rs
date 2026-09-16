@@ -6,4 +6,5 @@ pub mod config;
 pub mod engine;
 pub mod live;
 pub mod mcp;
+pub mod profiles;
 pub mod tools;

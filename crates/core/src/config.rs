@@ -9,6 +9,7 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 
 use crate::mcp::McpServerConfig;
+use crate::profiles::{self, Profile};
 
 const ENV_KEY: &str = "GEMINI_API_KEY";
 
@@ -49,6 +50,13 @@ struct FileConfig {
     /// Servidores MCP, `[[mcp_servers]]` no config.toml.
     #[serde(default)]
     mcp_servers: Vec<McpServerConfig>,
+    /// Id do perfil ativo (um dos embutidos ou um de `profiles`). Ausente =
+    /// perfil padrão (`profiles::DEFAULT_PROFILE_ID`).
+    profile: Option<String>,
+    /// Perfis próprios do usuário, `[[profiles]]` no config.toml. Um
+    /// customizado com o mesmo id de um embutido o sobrescreve.
+    #[serde(default)]
+    profiles: Vec<Profile>,
 }
 
 /// Marcador substituído pelo nome (ou por "você", sem nome) num
@@ -105,13 +113,49 @@ pub fn apply_user_name(prompt: &str, user_name: Option<&str>) -> String {
 }
 
 /// System prompt efetivo: o `system_prompt` customizado (com `{nome}`
-/// substituído) quando existir, senão o padrão personalizado com
-/// `user_name`.
+/// substituído) quando existir, senão o prompt do perfil ativo.
 pub fn effective_system_prompt(settings: &Settings) -> String {
     match &settings.system_prompt {
         Some(custom) => apply_user_name(custom, settings.user_name.as_deref()),
-        None => default_system_prompt(settings.user_name.as_deref()),
+        None => effective_profile(settings).system_prompt,
     }
+}
+
+/// Perfil ativo já resolvido: o id salvo em `profile` (ou o padrão), contra
+/// os perfis customizados e depois os embutidos. Um id desconhecido cai no
+/// padrão (aviso em log, nunca falha).
+pub fn effective_profile(settings: &Settings) -> Profile {
+    let id = settings
+        .profile
+        .as_deref()
+        .unwrap_or(profiles::DEFAULT_PROFILE_ID);
+    profiles::resolve_profile(id, settings.user_name.as_deref(), &settings.custom_profiles)
+}
+
+/// Voz efetiva: a customizada em `voice` quando existir, senão a do perfil
+/// ativo.
+pub fn effective_voice(settings: &Settings) -> String {
+    settings
+        .voice
+        .clone()
+        .unwrap_or_else(|| effective_profile(settings).voice)
+}
+
+/// Intensidade do efeito efetiva: `voice_fx = "off"` sempre desliga; senão o
+/// `voice_fx_amount` customizado quando existir, senão o do perfil ativo.
+pub fn effective_fx_amount(settings: &Settings) -> f32 {
+    if settings.voice_fx.as_deref() == Some("off") {
+        return 0.0;
+    }
+    settings
+        .voice_fx_amount
+        .unwrap_or_else(|| effective_profile(settings).fx_amount)
+}
+
+/// Embutidos + customizados, prontos para listar na UI (menu, select,
+/// `--list-profiles`).
+pub fn all_profiles(settings: &Settings) -> Vec<Profile> {
+    profiles::all_profiles(settings.user_name.as_deref(), &settings.custom_profiles)
 }
 
 /// Configuração efetiva depois de juntar config.toml e flags.
@@ -128,6 +172,10 @@ pub struct Settings {
     pub overlay_style: Option<String>,
     /// Servidores MCP (`[[mcp_servers]]`).
     pub mcp_servers: Vec<McpServerConfig>,
+    /// Id do perfil ativo. Ausente = padrão (`profiles::DEFAULT_PROFILE_ID`).
+    pub profile: Option<String>,
+    /// Perfis próprios do usuário (`[[profiles]]`).
+    pub custom_profiles: Vec<Profile>,
 }
 
 /// Estilo do overlay já resolvido: `surreal` (padrão) ou `orb`.
@@ -159,6 +207,10 @@ struct FileConfigOut {
     overlay_style: String,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     mcp_servers: Vec<McpServerConfig>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    profile: Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    profiles: Vec<Profile>,
 }
 
 /// Campos que a janela de configurações grava. `api_key` só vem preenchido
@@ -175,6 +227,8 @@ pub struct SaveSettings {
     pub voice_fx_amount: Option<f32>,
     pub user_name: Option<String>,
     pub overlay_style: String,
+    /// Id do perfil a ativar. Vazio preserva o perfil já salvo.
+    pub profile: String,
 }
 
 #[derive(Debug)]
@@ -249,6 +303,8 @@ pub fn load_settings() -> Settings {
         user_name: parsed.user_name.filter(|s| !s.trim().is_empty()),
         overlay_style: parsed.overlay_style,
         mcp_servers: parsed.mcp_servers,
+        profile: parsed.profile.filter(|s| !s.trim().is_empty()),
+        custom_profiles: parsed.profiles,
     }
 }
 
@@ -308,14 +364,47 @@ pub fn save(update: SaveSettings) -> Result<(), ConfigError> {
         user_name: update.user_name.filter(|s| !s.trim().is_empty()),
         overlay_style: normalize_overlay_style(Some(update.overlay_style)),
         mcp_servers: existing.mcp_servers,
+        profile: Some(update.profile)
+            .filter(|s| !s.trim().is_empty())
+            .or(existing.profile),
+        profiles: existing.profiles,
     };
 
-    let toml_str = toml::to_string_pretty(&out).map_err(ConfigError::SerializeFile)?;
+    write_file_config(&path, &out)
+}
+
+/// Troca só o perfil ativo no config.toml, preservando literalmente todo o
+/// resto do arquivo (voz, dispositivos, system prompt, perfis customizados
+/// etc.) — usado pelo menu da bandeja, que não reconstrói o formulário
+/// inteiro da janela de configurações.
+pub fn save_profile(id: &str) -> Result<(), ConfigError> {
+    let path = config_path().ok_or(ConfigError::NoHome)?;
+    let existing = read_file_config(&path);
+    let out = FileConfigOut {
+        api_key: existing.key(),
+        system_prompt: existing.system_prompt.clone(),
+        voice: existing.voice.clone(),
+        device_in: existing.device_in.clone(),
+        device_out: existing.device_out.clone(),
+        barge_in: existing.barge_in,
+        voice_fx: existing.voice_fx.clone(),
+        voice_fx_amount: existing.voice_fx_amount,
+        user_name: existing.user_name.clone(),
+        overlay_style: normalize_overlay_style(existing.overlay_style.clone()),
+        mcp_servers: existing.mcp_servers.clone(),
+        profile: Some(id.to_string()),
+        profiles: existing.profiles.clone(),
+    };
+    write_file_config(&path, &out)
+}
+
+fn write_file_config(path: &PathBuf, out: &FileConfigOut) -> Result<(), ConfigError> {
+    let toml_str = toml::to_string_pretty(out).map_err(ConfigError::SerializeFile)?;
 
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|err| ConfigError::WriteFile(path.clone(), err))?;
     }
-    std::fs::write(&path, toml_str).map_err(|err| ConfigError::WriteFile(path.clone(), err))?;
+    std::fs::write(path, toml_str).map_err(|err| ConfigError::WriteFile(path.clone(), err))?;
     Ok(())
 }
 
@@ -346,16 +435,24 @@ mod tests {
         assert!(c.device_out.is_none());
     }
 
+    /// `HOME` é global no processo; `cargo test` roda os testes em threads
+    /// paralelas, então mais de um `TempHome` vivo ao mesmo tempo faz um
+    /// pisar no `HOME` do outro. Este mutex serializa os testes que precisam
+    /// de um `HOME` isolado.
+    static TEMP_HOME_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     /// Isola `save`/`load_settings` num `HOME` temporário: os dois lêem o
     /// caminho do config a partir da env, então o teste não pode tocar o
     /// `~/.config/jarvis/config.toml` real.
     struct TempHome {
+        _guard: std::sync::MutexGuard<'static, ()>,
         original: Option<std::ffi::OsString>,
         dir: PathBuf,
     }
 
     impl TempHome {
         fn new() -> Self {
+            let guard = TEMP_HOME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
             let unique = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
@@ -364,7 +461,11 @@ mod tests {
             std::fs::create_dir_all(&dir).expect("cria diretório temporário");
             let original = std::env::var_os("HOME");
             std::env::set_var("HOME", &dir);
-            TempHome { original, dir }
+            TempHome {
+                _guard: guard,
+                original,
+                dir,
+            }
         }
     }
 
@@ -428,6 +529,89 @@ mod tests {
         assert_eq!(normalize_overlay_style(Some("".to_string())), "surreal");
         assert_eq!(normalize_overlay_style(Some("bogus".to_string())), "surreal");
         assert_eq!(normalize_overlay_style(Some("orb".to_string())), "orb");
+    }
+
+    #[test]
+    fn load_settings_reads_profile_id_and_custom_profiles() {
+        let home = TempHome::new();
+        save(SaveSettings {
+            api_key: Some("k".to_string()),
+            profile: "pair_programmer".to_string(),
+            ..Default::default()
+        })
+        .unwrap();
+
+        let path = config_path().unwrap();
+        let mut contents = std::fs::read_to_string(&path).unwrap();
+        contents.push_str(
+            "\n[[profiles]]\nid = \"meu_perfil\"\nname = \"Meu Perfil\"\nsystem_prompt = \"seja você mesmo\"\n",
+        );
+        std::fs::write(&path, contents).unwrap();
+
+        let settings = load_settings();
+        assert_eq!(settings.profile.as_deref(), Some("pair_programmer"));
+        assert_eq!(settings.custom_profiles.len(), 1);
+        assert_eq!(settings.custom_profiles[0].id, "meu_perfil");
+
+        let profile = effective_profile(&settings);
+        assert_eq!(profile.id, "pair_programmer");
+
+        drop(home);
+    }
+
+    #[test]
+    fn custom_profile_with_builtin_id_overrides_it() {
+        let home = TempHome::new();
+        let settings = Settings {
+            profile: Some("assistant".to_string()),
+            custom_profiles: vec![Profile {
+                id: "assistant".to_string(),
+                name: "Assistente custom".to_string(),
+                description: String::new(),
+                system_prompt: "prompt próprio".to_string(),
+                voice: "Kore".to_string(),
+                fx_amount: 0.1,
+            }],
+            ..Default::default()
+        };
+        let profile = effective_profile(&settings);
+        assert_eq!(profile.name, "Assistente custom");
+        assert_eq!(profile.system_prompt, "prompt próprio");
+        assert_eq!(effective_voice(&settings), "Kore");
+        assert_eq!(effective_fx_amount(&settings), 0.1);
+        drop(home);
+    }
+
+    #[test]
+    fn unknown_profile_id_falls_back_to_default() {
+        let settings = Settings {
+            profile: Some("nao-existe".to_string()),
+            ..Default::default()
+        };
+        let profile = effective_profile(&settings);
+        assert_eq!(profile.id, profiles::DEFAULT_PROFILE_ID);
+    }
+
+    #[test]
+    fn save_profile_switches_active_profile_and_preserves_the_rest() {
+        let home = TempHome::new();
+        save(SaveSettings {
+            api_key: Some("chave-secreta".to_string()),
+            voice: Some("Kore".to_string()),
+            system_prompt: Some("meu prompt".to_string()),
+            ..Default::default()
+        })
+        .unwrap();
+
+        save_profile("english_teacher").expect("troca o perfil");
+
+        let settings = load_settings();
+        assert_eq!(settings.profile.as_deref(), Some("english_teacher"));
+        assert_eq!(settings.voice.as_deref(), Some("Kore"));
+        assert_eq!(settings.system_prompt.as_deref(), Some("meu prompt"));
+        assert_eq!(load_api_key().unwrap(), "chave-secreta");
+
+        drop(home);
     }
 
     #[test]

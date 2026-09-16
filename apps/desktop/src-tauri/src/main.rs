@@ -11,10 +11,12 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 
 use openjarvisbr_core::config::{
-    effective_overlay_style, effective_system_prompt, load_api_key, load_settings,
+    all_profiles, effective_fx_amount, effective_overlay_style, effective_system_prompt,
+    effective_voice, load_api_key, load_settings, save_profile,
 };
 use openjarvisbr_core::engine::{Engine, EngineConfig, EngineEvent, EngineHandle, EngineState};
-use tauri::menu::{Menu, MenuItem};
+use openjarvisbr_core::profiles::DEFAULT_PROFILE_ID;
+use tauri::menu::{CheckMenuItem, IsMenuItem, Menu, MenuItem, Submenu};
 use tauri::tray::TrayIconBuilder;
 use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
@@ -33,10 +35,21 @@ const TRAY_ID: &str = "main";
 pub(crate) struct AppState {
     pub(crate) engine: Mutex<Option<EngineHandle>>,
     mute_item: Mutex<Option<MenuItem<tauri::Wry>>>,
+    /// Itens `CheckMenuItem` do submenu "Perfil", por id de perfil — para
+    /// marcar o ativo sem reconstruir o menu inteiro a cada troca.
+    profile_items: Mutex<Vec<(String, CheckMenuItem<tauri::Wry>)>>,
     muted: AtomicBool,
     /// Erro esperando a janela de configurações carregar e consumir via
     /// `take_pending_error` (ver `errors.rs`).
     pub(crate) pending_error: Mutex<Option<errors::SettingsErrorPayload>>,
+}
+
+/// Texto pedido ao Jarvis logo após trocar de perfil, para ele se apresentar
+/// no papel novo.
+pub(crate) const PROFILE_GREETING: &str = "Apresente-se brevemente no seu novo papel.";
+
+fn profile_menu_id(id: &str) -> String {
+    format!("profile:{id}")
 }
 
 fn icon_for_state(state: EngineState) -> tauri::image::Image<'static> {
@@ -215,7 +228,42 @@ fn open_overlay_window(app: &AppHandle) {
     });
 }
 
+/// Marca no submenu "Perfil" o item cujo id é `active_id`, desmarcando os
+/// demais — chamado depois de qualquer troca de perfil, seja pelo próprio
+/// menu ou pela janela de configurações, para os dois ficarem em sincronia.
+pub(crate) fn sync_profile_menu(app: &AppHandle, active_id: &str) {
+    let handle = app.clone();
+    let active_id = active_id.to_string();
+    let _ = app.run_on_main_thread(move || {
+        let state = handle.state::<AppState>();
+        let guard = state.profile_items.lock().unwrap_or_else(|e| e.into_inner());
+        for (id, item) in guard.iter() {
+            let _ = item.set_checked(*id == active_id);
+        }
+    });
+}
+
+/// Troca de perfil pedida no menu da bandeja: salva só o `profile` no
+/// config.toml (preserva o resto), sincroniza o check do menu e reinicia o
+/// motor pedindo que o Jarvis se apresente no papel novo.
+fn switch_profile(app: &AppHandle, id: &str) {
+    if let Err(err) = save_profile(id) {
+        tracing::warn!(erro = %err, "não foi possível salvar o perfil escolhido");
+        return;
+    }
+    sync_profile_menu(app, id);
+    let app = app.clone();
+    tauri::async_runtime::spawn(restart_engine_with_greeting(
+        app,
+        Some(PROFILE_GREETING.to_string()),
+    ));
+}
+
 fn handle_menu_event(app: &AppHandle, id: &str) {
+    if let Some(profile_id) = id.strip_prefix("profile:") {
+        switch_profile(app, profile_id);
+        return;
+    }
     match id {
         "mute" => toggle_mute(app),
         "reconnect" => do_reconnect(app),
@@ -276,19 +324,24 @@ async fn forward_events(app: AppHandle, mut events: broadcast::Receiver<EngineEv
     }
 }
 
-/// Monta a `EngineConfig` a partir da chave e do config.toml atuais.
-fn build_engine_config(api_key: String) -> EngineConfig {
+/// Monta a `EngineConfig` a partir da chave e do config.toml atuais — voz,
+/// prompt e intensidade do efeito vêm do perfil ativo, a menos que o usuário
+/// tenha um valor próprio salvo (ver `effective_*` em `config.rs`).
+fn build_engine_config(api_key: String, greeting: Option<String>) -> EngineConfig {
     let settings = load_settings();
     let system_prompt = effective_system_prompt(&settings);
+    let voice = effective_voice(&settings);
+    let fx_amount = effective_fx_amount(&settings);
     EngineConfig {
         api_key,
-        voice: settings.voice.unwrap_or_else(|| "Puck".to_string()),
-        device_in: settings.device_in,
-        device_out: settings.device_out,
+        voice,
+        device_in: settings.device_in.clone(),
+        device_out: settings.device_out.clone(),
         barge_in: settings.barge_in.unwrap_or(false),
         record_dir: None,
         system_prompt,
-        fx_amount: settings.voice_fx_amount.unwrap_or(0.35),
+        fx_amount,
+        greeting,
     }
 }
 
@@ -297,6 +350,12 @@ fn build_engine_config(api_key: String) -> EngineConfig {
 /// dispositivos, barge-in ou system prompt, que só entram em vigor no
 /// próximo `Engine::start`.
 pub(crate) async fn restart_engine(app: AppHandle) {
+    restart_engine_with_greeting(app, None).await;
+}
+
+/// Como `restart_engine`, mas com `greeting` opcional: usado ao trocar de
+/// perfil, para o Jarvis se apresentar no papel novo assim que reconectar.
+pub(crate) async fn restart_engine_with_greeting(app: AppHandle, greeting: Option<String>) {
     let old = {
         let state = app.state::<AppState>();
         let mut guard = state.engine.lock().unwrap_or_else(|e| e.into_inner());
@@ -305,13 +364,19 @@ pub(crate) async fn restart_engine(app: AppHandle) {
     if let Some(engine) = old {
         engine.stop().await;
     }
-    spawn_startup(app);
+    spawn_startup_with_greeting(app, greeting);
 }
 
 /// Carrega chave e config, sobe o motor e passa a reemitir seus eventos.
 /// Sem chave (ou falha ao conectar), abre a janela de configurações vazia e
 /// deixa a bandeja em erro — nunca expõe a chave em log.
 fn spawn_startup(app: AppHandle) {
+    spawn_startup_with_greeting(app, None);
+}
+
+/// Como `spawn_startup`, mas com `greeting` opcional (ver
+/// `restart_engine_with_greeting`).
+fn spawn_startup_with_greeting(app: AppHandle, greeting: Option<String>) {
     tauri::async_runtime::spawn(async move {
         let api_key = match load_api_key() {
             Ok(key) => key,
@@ -323,7 +388,7 @@ fn spawn_startup(app: AppHandle) {
             }
         };
 
-        let config = build_engine_config(api_key);
+        let config = build_engine_config(api_key, greeting);
 
         match Engine::start(config).await {
             Ok(handle) => {
@@ -382,6 +447,7 @@ fn main() {
         .manage(AppState {
             engine: Mutex::new(None),
             mute_item: Mutex::new(None),
+            profile_items: Mutex::new(Vec::new()),
             muted: AtomicBool::new(false),
             pending_error: Mutex::new(None),
         })
@@ -400,16 +466,48 @@ fn main() {
 
             let mute_item = MenuItem::with_id(app, "mute", "Mutar", true, None::<&str>)?;
             let reconnect_item = MenuItem::with_id(app, "reconnect", "Reconectar", true, None::<&str>)?;
+
+            let settings_at_startup = load_settings();
+            let active_profile = settings_at_startup
+                .profile
+                .clone()
+                .unwrap_or_else(|| DEFAULT_PROFILE_ID.to_string());
+            let mut profile_items: Vec<(String, CheckMenuItem<tauri::Wry>)> = Vec::new();
+            for profile in all_profiles(&settings_at_startup) {
+                let checked = profile.id == active_profile;
+                let item = CheckMenuItem::with_id(
+                    app,
+                    profile_menu_id(&profile.id),
+                    &profile.name,
+                    true,
+                    checked,
+                    None::<&str>,
+                )?;
+                profile_items.push((profile.id, item));
+            }
+            let profile_refs: Vec<&dyn IsMenuItem<tauri::Wry>> = profile_items
+                .iter()
+                .map(|(_, item)| item as &dyn IsMenuItem<tauri::Wry>)
+                .collect();
+            let profile_submenu = Submenu::with_items(app, "Perfil", true, &profile_refs)?;
+
             let settings_item = MenuItem::with_id(app, "settings", "Configurações", true, None::<&str>)?;
             let quit_item = MenuItem::with_id(app, "quit", "Sair", true, None::<&str>)?;
             let menu = Menu::with_items(
                 app,
-                &[&mute_item, &reconnect_item, &settings_item, &quit_item],
+                &[
+                    &mute_item,
+                    &reconnect_item,
+                    &profile_submenu,
+                    &settings_item,
+                    &quit_item,
+                ],
             )?;
 
             {
                 let state = app.state::<AppState>();
                 *state.mute_item.lock().unwrap_or_else(|e| e.into_inner()) = Some(mute_item);
+                *state.profile_items.lock().unwrap_or_else(|e| e.into_inner()) = profile_items;
             }
 
             let _tray = TrayIconBuilder::with_id(TRAY_ID)

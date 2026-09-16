@@ -11,6 +11,12 @@ import { listen } from "@tauri-apps/api/event";
 
 const VOICES = ["Puck", "Charon", "Kore", "Fenrir", "Aoede", "Leda", "Orus", "Zephyr"];
 
+interface ProfileOption {
+  id: string;
+  name: string;
+  description: string;
+}
+
 interface SettingsPayload {
   has_api_key: boolean;
   api_key_chars: number;
@@ -23,6 +29,8 @@ interface SettingsPayload {
   default_system_prompt: string;
   user_name: string;
   overlay_style: string;
+  profile: string;
+  profiles: ProfileOption[];
 }
 
 interface DevicesPayload {
@@ -41,6 +49,8 @@ const $ = <T extends HTMLElement>(id: string): T => {
   return el as T;
 };
 
+const profileSelect = $<HTMLSelectElement>("profile");
+const profileDescription = $<HTMLDivElement>("profile-description");
 const userNameInput = $<HTMLInputElement>("user-name");
 const apiKeyInput = $<HTMLInputElement>("api-key");
 const apiKeyHint = $<HTMLDivElement>("api-key-hint");
@@ -58,6 +68,25 @@ const saveButton = $<HTMLButtonElement>("save");
 const statusEl = $<HTMLSpanElement>("status");
 
 let defaultSystemPrompt = "";
+let profiles: ProfileOption[] = [];
+
+function fillProfiles(available: ProfileOption[], current: string) {
+  profiles = available;
+  profileSelect.innerHTML = "";
+  for (const profile of available) {
+    const option = document.createElement("option");
+    option.value = profile.id;
+    option.textContent = profile.name;
+    profileSelect.appendChild(option);
+  }
+  profileSelect.value = current;
+  updateProfileDescription();
+}
+
+function updateProfileDescription() {
+  const active = profiles.find((p) => p.id === profileSelect.value);
+  profileDescription.textContent = active?.description ?? "";
+}
 
 function fillVoices(current: string) {
   voiceSelect.innerHTML = "";
@@ -113,6 +142,7 @@ async function load() {
 
   defaultSystemPrompt = settings.default_system_prompt;
   userNameInput.value = settings.user_name;
+  fillProfiles(settings.profiles, settings.profile);
 
   noKeyBanner.classList.toggle("visible", !settings.has_api_key);
   apiKeyHint.textContent = settings.has_api_key
@@ -142,6 +172,7 @@ apiKeyInput.addEventListener("input", () => {
   apiKeyHint.classList.remove("error");
   apiKeyInput.classList.remove("error");
 });
+profileSelect.addEventListener("change", updateProfileDescription);
 deviceInSelect.addEventListener("change", () => deviceInSelect.classList.remove("error"));
 deviceOutSelect.addEventListener("change", () => deviceOutSelect.classList.remove("error"));
 
@@ -163,6 +194,7 @@ saveButton.addEventListener("click", async () => {
     const apiKey = apiKeyInput.value.trim();
     await invoke("save_settings", {
       payload: {
+        profile: profileSelect.value,
         user_name: userNameInput.value.trim(),
         api_key: apiKey.length > 0 ? apiKey : null,
         voice: voiceSelect.value,

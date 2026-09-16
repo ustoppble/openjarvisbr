@@ -59,6 +59,10 @@ pub struct LiveConfig {
     pub system_prompt: Option<String>,
     /// Ferramentas declaradas no setup (e em cada reconexão).
     pub tools: Vec<ToolSpec>,
+    /// Texto enviado como turno de usuário logo após a primeira conexão
+    /// (nunca em reconexões automáticas) — usado para pedir que o Jarvis se
+    /// apresente ao trocar de perfil.
+    pub greeting: Option<String>,
 }
 
 impl LiveConfig {
@@ -69,6 +73,7 @@ impl LiveConfig {
             raw_log: None,
             system_prompt: None,
             tools: Vec::new(),
+            greeting: None,
         }
     }
 
@@ -79,6 +84,11 @@ impl LiveConfig {
 
     pub fn with_tools(mut self, tools: Vec<ToolSpec>) -> Self {
         self.tools = tools;
+        self
+    }
+
+    pub fn with_greeting(mut self, text: impl Into<String>) -> Self {
+        self.greeting = Some(text.into());
         self
     }
 
@@ -184,9 +194,21 @@ pub struct LiveSession {
 }
 
 impl LiveSession {
-    /// Abre o socket, envia o setup e espera `setupComplete`.
+    /// Abre o socket, envia o setup e espera `setupComplete`. Com
+    /// `cfg.greeting`, manda esse texto como turno de usuário logo em
+    /// seguida (só na primeira conexão — reconexões automáticas não
+    /// repetem).
     pub async fn connect(cfg: LiveConfig) -> Result<LiveSession, LiveError> {
-        let (sink, stream) = open(&cfg, None).await?;
+        let (mut sink, stream) = open(&cfg, None).await?;
+
+        if let Some(greeting) = &cfg.greeting {
+            let request = ClientContentRequest::text(greeting.clone());
+            if let Ok(json) = serde_json::to_string(&request) {
+                if let Err(err) = sink.send(Message::text(json)).await {
+                    warn!(host = HOST, erro = %scrub(&err.to_string(), &cfg.api_key), "falha ao enviar saudação de perfil");
+                }
+            }
+        }
 
         let (audio_tx, audio_rx) = mpsc::channel(CHANNEL_CAPACITY);
         let (tool_tx, tool_rx) = mpsc::channel(CHANNEL_CAPACITY);

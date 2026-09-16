@@ -38,6 +38,14 @@ struct Cli {
     #[arg(long, value_name = "PASTA")]
     record: Option<std::path::PathBuf>,
 
+    /// Perfil de personalidade a usar (padrão: config.toml ou "assistant")
+    #[arg(long, value_name = "ID")]
+    profile: Option<String>,
+
+    /// Lista os perfis disponíveis (embutidos + os do config.toml) e sai
+    #[arg(long)]
+    list_profiles: bool,
+
     /// Ativa logs em nível debug
     #[arg(long)]
     debug: bool,
@@ -82,6 +90,14 @@ fn main() {
     let cli = Cli::parse();
     init_tracing(cli.debug);
 
+    if cli.list_profiles {
+        let settings = config::load_settings();
+        for profile in config::all_profiles(&settings) {
+            println!("{:<18} {:<24} {}", profile.id, profile.name, profile.description);
+        }
+        return;
+    }
+
     let _instance_lock = match acquire_single_instance_lock() {
         Ok(lock) => lock,
         Err(msg) => {
@@ -113,24 +129,22 @@ fn main() {
         }
     };
 
-    // Flag na linha de comando vence o config.toml, que vence o padrão.
-    let settings = config::load_settings();
+    // Flag na linha de comando vence o config.toml, que vence o perfil ativo.
+    let mut settings = config::load_settings();
+    if let Some(id) = cli.profile.clone() {
+        settings.profile = Some(id);
+    }
     let system_prompt = config::effective_system_prompt(&settings);
     let engine_config = EngineConfig {
         api_key,
-        voice: cli.voice.or(settings.voice).unwrap_or_else(|| "Puck".to_string()),
-        device_in: cli.device_in.or(settings.device_in),
-        device_out: cli.device_out.or(settings.device_out),
+        voice: cli.voice.unwrap_or_else(|| config::effective_voice(&settings)),
+        device_in: cli.device_in.or(settings.device_in.clone()),
+        device_out: cli.device_out.or(settings.device_out.clone()),
         barge_in: cli.barge_in || settings.barge_in.unwrap_or(false),
         record_dir: cli.record,
-        fx_amount: cli.fx_amount.unwrap_or_else(|| {
-            if settings.voice_fx.as_deref() == Some("off") {
-                0.0
-            } else {
-                settings.voice_fx_amount.unwrap_or(0.35)
-            }
-        }),
+        fx_amount: cli.fx_amount.unwrap_or_else(|| config::effective_fx_amount(&settings)),
         system_prompt,
+        greeting: None,
     };
     let barge_in = engine_config.barge_in;
     let fx_amount = engine_config.fx_amount.clamp(0.0, 1.0);

@@ -4,13 +4,23 @@
 
 use openjarvisbr_core::audio::{capture::list_input_devices, playback::list_output_devices};
 use openjarvisbr_core::config::{
-    default_system_prompt, effective_overlay_style, load_api_key, load_settings, save,
-    SaveSettings,
+    all_profiles, default_system_prompt, effective_overlay_style, load_api_key, load_settings,
+    save, SaveSettings,
 };
+use openjarvisbr_core::profiles::DEFAULT_PROFILE_ID;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager};
 
 use crate::AppState;
+
+/// Perfil pronto para o `<select>` da janela de configurações: só o que a UI
+/// precisa mostrar, sem o prompt de sistema inteiro no payload.
+#[derive(Debug, Serialize)]
+pub struct ProfileOption {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+}
 
 #[derive(Debug, Serialize)]
 pub struct SettingsPayload {
@@ -25,6 +35,8 @@ pub struct SettingsPayload {
     pub default_system_prompt: String,
     pub user_name: String,
     pub overlay_style: String,
+    pub profile: String,
+    pub profiles: Vec<ProfileOption>,
 }
 
 /// Estado atual do config.toml, pronto para preencher o formulário. A chave
@@ -35,6 +47,18 @@ pub fn get_settings() -> SettingsPayload {
     let key = load_api_key().ok();
     let settings = load_settings();
     let overlay_style = effective_overlay_style(&settings);
+    let profile = settings
+        .profile
+        .clone()
+        .unwrap_or_else(|| DEFAULT_PROFILE_ID.to_string());
+    let profiles = all_profiles(&settings)
+        .into_iter()
+        .map(|p| ProfileOption {
+            id: p.id,
+            name: p.name,
+            description: p.description,
+        })
+        .collect();
     SettingsPayload {
         has_api_key: key.is_some(),
         api_key_chars: key.map(|k| k.chars().count()).unwrap_or(0),
@@ -50,6 +74,8 @@ pub fn get_settings() -> SettingsPayload {
         default_system_prompt: default_system_prompt(settings.user_name.as_deref()),
         user_name: settings.user_name.clone().unwrap_or_default(),
         overlay_style,
+        profile,
+        profiles,
     }
 }
 
@@ -81,6 +107,7 @@ pub struct SaveSettingsPayload {
     pub system_prompt: String,
     pub user_name: String,
     pub overlay_style: String,
+    pub profile: String,
 }
 
 /// Ajusta a intensidade do efeito de voz na sessão em andamento, sem
@@ -102,6 +129,11 @@ pub fn set_fx_amount(app: AppHandle, amount: f32) {
 pub async fn save_settings(app: AppHandle, payload: SaveSettingsPayload) -> Result<(), String> {
     let before = load_settings();
     let before_user_name = before.user_name.clone().unwrap_or_default();
+    let before_profile = before
+        .profile
+        .clone()
+        .unwrap_or_else(|| DEFAULT_PROFILE_ID.to_string());
+    let profile_changed = before_profile != payload.profile;
     let needs_restart = before.voice.as_deref().unwrap_or("Puck") != payload.voice
         || before.device_in.as_deref() != payload.device_in.as_deref()
         || before.device_out.as_deref() != payload.device_out.as_deref()
@@ -111,7 +143,8 @@ pub async fn save_settings(app: AppHandle, payload: SaveSettingsPayload) -> Resu
             .clone()
             .unwrap_or_else(|| default_system_prompt(before.user_name.as_deref()))
             != payload.system_prompt
-        || before_user_name != payload.user_name;
+        || before_user_name != payload.user_name
+        || profile_changed;
 
     save(SaveSettings {
         api_key: payload.api_key.clone(),
@@ -123,10 +156,14 @@ pub async fn save_settings(app: AppHandle, payload: SaveSettingsPayload) -> Resu
         voice_fx_amount: Some(payload.voice_fx_amount),
         user_name: Some(payload.user_name.clone()),
         overlay_style: payload.overlay_style.clone(),
+        profile: payload.profile.clone(),
     })
     .map_err(|err| err.to_string())?;
 
-    if needs_restart || payload.api_key.as_deref().is_some_and(|k| !k.is_empty()) {
+    if profile_changed {
+        crate::sync_profile_menu(&app, &payload.profile);
+        crate::restart_engine_with_greeting(app, Some(crate::PROFILE_GREETING.to_string())).await;
+    } else if needs_restart || payload.api_key.as_deref().is_some_and(|k| !k.is_empty()) {
         crate::restart_engine(app).await;
     } else {
         set_fx_amount(app, payload.voice_fx_amount);

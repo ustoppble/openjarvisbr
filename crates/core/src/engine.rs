@@ -102,6 +102,10 @@ pub struct EngineConfig {
     pub system_prompt: String,
     /// Intensidade do efeito de voz (0 = desligado).
     pub fx_amount: f32,
+    /// Texto pedido como turno de usuário logo após conectar (ex.: "se
+    /// apresente no seu novo papel" ao trocar de perfil). `None` no início
+    /// normal do app.
+    pub greeting: Option<String>,
 }
 
 impl std::fmt::Debug for EngineConfig {
@@ -114,6 +118,7 @@ impl std::fmt::Debug for EngineConfig {
             .field("barge_in", &self.barge_in)
             .field("record_dir", &self.record_dir)
             .field("fx_amount", &self.fx_amount)
+            .field("greeting", &self.greeting)
             .finish()
     }
 }
@@ -125,6 +130,9 @@ impl EngineConfig {
         if let Some(dir) = &self.record_dir {
             let _ = std::fs::create_dir_all(dir);
             cfg = cfg.with_raw_log(dir.join("raw.jsonl"));
+        }
+        if let Some(greeting) = &self.greeting {
+            cfg = cfg.with_greeting(greeting.clone());
         }
         cfg
     }
@@ -444,7 +452,7 @@ impl Worker {
     /// Conecta e abre os dispositivos, na mesma ordem de antes: sessão,
     /// microfone, saída.
     async fn open(
-        config: EngineConfig,
+        mut config: EngineConfig,
         mut backend: Backend,
         commands: mpsc::UnboundedReceiver<Command>,
         emit: Emitter,
@@ -455,6 +463,10 @@ impl Worker {
         let session = connect(&config, &mut backend)
             .await
             .map_err(EngineError::Connect)?;
+        // O `greeting` (ex.: "se apresente no novo papel") é só para a
+        // primeira conexão; uma reconexão manual (`Worker::reconnect`) reusa
+        // este `config` e não deve repeti-lo.
+        config.greeting = None;
 
         let (mic, capture, output) = match &mut backend {
             Backend::Real => {
@@ -909,6 +921,7 @@ mod tests {
             record_dir: None,
             system_prompt: String::new(),
             fx_amount: 0.35,
+            greeting: None,
         }
     }
 
