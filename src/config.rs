@@ -12,7 +12,18 @@ const ENV_KEY: &str = "GEMINI_API_KEY";
 
 #[derive(Debug, Deserialize, Default)]
 struct FileConfig {
+    /// Nome documentado no README e no roteiro de testes.
+    api_key: Option<String>,
+    /// Nome legado, ainda aceito.
     gemini_api_key: Option<String>,
+}
+
+impl FileConfig {
+    fn key(self) -> Option<String> {
+        self.api_key
+            .or(self.gemini_api_key)
+            .filter(|k| !k.is_empty())
+    }
 }
 
 #[derive(Debug)]
@@ -30,7 +41,7 @@ impl fmt::Display for ConfigError {
                 "GEMINI_API_KEY não encontrada. Configure de uma das formas:\n\
                  \x20\x201. export GEMINI_API_KEY=sua_chave\n\
                  \x20\x202. crie ~/.config/jarvis/config.toml com:\n\
-                 \x20\x20\x20\x20 gemini_api_key = \"sua_chave\""
+                 \x20\x20\x20\x20 api_key = \"sua_chave\""
             ),
             ConfigError::ReadFile(path, err) => {
                 write!(f, "não foi possível ler {}: {err}", path.display())
@@ -73,15 +84,22 @@ pub fn load_api_key() -> Result<String, ConfigError> {
     let parsed: FileConfig =
         toml::from_str(&contents).map_err(|err| ConfigError::ParseFile(path.clone(), err))?;
 
-    parsed
-        .gemini_api_key
-        .filter(|k| !k.is_empty())
-        .ok_or(ConfigError::MissingKey)
+    parsed.key().ok_or(ConfigError::MissingKey)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn file_config_accepts_api_key_and_legacy_name() {
+        let a: FileConfig = toml::from_str("api_key = \"abc\"").unwrap();
+        assert_eq!(a.key().as_deref(), Some("abc"));
+        let b: FileConfig = toml::from_str("gemini_api_key = \"xyz\"").unwrap();
+        assert_eq!(b.key().as_deref(), Some("xyz"));
+        let c: FileConfig = toml::from_str("api_key = \"\"").unwrap();
+        assert_eq!(c.key(), None);
+    }
 
     #[test]
     fn missing_key_message_mentions_both_options() {
