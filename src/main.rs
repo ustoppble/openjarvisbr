@@ -1,4 +1,4 @@
-//! Ponto de entrada do Jarvis: parseia flags, carrega config e sobe a App.
+//! Ponto de entrada da SextaFeira: parseia flags, carrega config e sobe a App.
 
 mod app;
 mod audio;
@@ -9,9 +9,9 @@ use clap::Parser;
 
 use app::App;
 
-/// Assistente de voz Jarvis — conversa contínua com o gemini-3.8-live.
+/// Assistente de voz SextaFeira — conversa contínua com o gemini-3.8-live.
 #[derive(Parser, Debug)]
-#[command(name = "jarvis", version, about)]
+#[command(name = "sexta", version, about)]
 struct Cli {
     /// Voz usada pelo modelo
     #[arg(long, default_value = "Puck")]

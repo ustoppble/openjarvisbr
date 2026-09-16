@@ -1,4 +1,4 @@
-//! Estado da aplicação e loop principal do Jarvis.
+//! Estado da aplicação e loop principal da SextaFeira.
 
 use tracing::info;
 
@@ -29,7 +29,7 @@ impl App {
     /// está pronto, sem nunca logar a chave — só seu tamanho em bytes.
     pub fn run(&mut self, api_key_len: usize) {
         self.state = State::Idle;
-        info!(chave_bytes = api_key_len, "jarvis pronto (scaffold)");
+        info!(chave_bytes = api_key_len, "sextafeira pronta (scaffold)");
     }
 
     #[allow(dead_code)]
