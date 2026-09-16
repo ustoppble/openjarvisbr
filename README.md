@@ -48,6 +48,9 @@ cargo run --release
 
 Flags: `--voice`, `--device-in`, `--device-out`, `--debug`.
 
+Antes de testar de verdade, siga o roteiro leigo em [`docs/testes/v1.md`](docs/testes/v1.md) —
+ele cobre desde criar a chave até conversa de 2 minutos, interrupção, mudo e reconexão de rede.
+
 ## Stack
 
 Rust stable · [cpal](https://github.com/RustAudio/cpal) · [rubato](https://github.com/HEnquist/rubato) ·
