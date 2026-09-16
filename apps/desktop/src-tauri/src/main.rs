@@ -10,7 +10,9 @@ mod errors;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 
-use openjarvisbr_core::config::{effective_system_prompt, load_api_key, load_settings};
+use openjarvisbr_core::config::{
+    effective_overlay_style, effective_system_prompt, load_api_key, load_settings,
+};
 use openjarvisbr_core::engine::{Engine, EngineConfig, EngineEvent, EngineHandle, EngineState};
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::TrayIconBuilder;
@@ -140,14 +142,25 @@ pub(crate) fn open_settings_window(app: &AppHandle) {
     });
 }
 
-const OVERLAY_WIDTH: f64 = 420.0;
-const OVERLAY_HEIGHT: f64 = 140.0;
+const OVERLAY_WIDTH_ORB: f64 = 420.0;
+const OVERLAY_HEIGHT_ORB: f64 = 140.0;
+/// A cena 3D surreal precisa de mais espaço que o orb de 7 pontos.
+const OVERLAY_WIDTH_SURREAL: f64 = 520.0;
+const OVERLAY_HEIGHT_SURREAL: f64 = 220.0;
 const OVERLAY_TOP_MARGIN: f64 = 12.0;
+
+/// Dimensões da janela do overlay pro `overlay_style` atual.
+fn overlay_size() -> (f64, f64) {
+    match effective_overlay_style(&load_settings()).as_str() {
+        "orb" => (OVERLAY_WIDTH_ORB, OVERLAY_HEIGHT_ORB),
+        _ => (OVERLAY_WIDTH_SURREAL, OVERLAY_HEIGHT_SURREAL),
+    }
+}
 
 /// Topo central do monitor ativo (o que está sob o cursor, com fallback pro
 /// primário), em pixels lógicos, respeitando a `work_area` do monitor para
 /// não abrir atrás da menu bar/dock.
-fn overlay_position(app: &AppHandle) -> (f64, f64) {
+fn overlay_position(app: &AppHandle, width: f64) -> (f64, f64) {
     let monitor = app
         .cursor_position()
         .ok()
@@ -160,7 +173,7 @@ fn overlay_position(app: &AppHandle) -> (f64, f64) {
 
     let scale = monitor.scale_factor();
     let area = monitor.work_area();
-    let width_px = OVERLAY_WIDTH * scale;
+    let width_px = width * scale;
     let margin_px = OVERLAY_TOP_MARGIN * scale;
 
     let x = area.position.x as f64 + (area.size.width as f64 - width_px) / 2.0;
@@ -176,7 +189,8 @@ fn open_overlay_window(app: &AppHandle) {
             // Overlay já existe, deixa ele gerenciar sua visibilidade via eventos
             return;
         }
-        let (x, y) = overlay_position(&handle);
+        let (width, height) = overlay_size();
+        let (x, y) = overlay_position(&handle, width);
         // `visible(true)` mantém a janela sempre mapeada: o show/hide real é
         // puramente CSS (overlay.ts), assim nunca chamamos a API nativa de
         // show() que tornaria a janela key window. `focusable(false)` é a
@@ -191,7 +205,7 @@ fn open_overlay_window(app: &AppHandle) {
             .focused(false)
             .focusable(false)
             .visible(true)
-            .inner_size(OVERLAY_WIDTH, OVERLAY_HEIGHT)
+            .inner_size(width, height)
             .position(x, y)
             .build();
 

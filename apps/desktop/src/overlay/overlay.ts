@@ -1,4 +1,6 @@
+import { invoke } from "@tauri-apps/api/core";
 import { listen, UnlistenFn } from "@tauri-apps/api/event";
+import { createSurrealScene, SurrealScene, SurrealState } from "./surreal";
 
 interface EnginePayload {
     state?: string;
@@ -19,6 +21,15 @@ function clamp01(value: number): number {
     return Math.min(1, Math.max(0, value));
 }
 
+// "connecting" e o estado inicial (sem evento ainda) mapeiam para standby;
+// os demais nomes já batem com os estados do engine.
+function toSurrealState(state: string): SurrealState {
+    if (state === "listening" || state === "speaking" || state === "muted" || state === "error") {
+        return state;
+    }
+    return "standby";
+}
+
 class OverlayManager {
     private container: HTMLElement;
     private userTextEl: HTMLElement;
@@ -27,6 +38,7 @@ class OverlayManager {
     private hideTimer: number | null = null;
     private currentState = "idle";
     private listeners: UnlistenFn[] = [];
+    private scene: SurrealScene | null = null;
 
     constructor() {
         this.container = document.getElementById("app") || document.body;
@@ -36,6 +48,7 @@ class OverlayManager {
     }
 
     async initialize() {
+        await this.initializeScene();
         this.listeners.push(
             await listen("engine://state", (event: any) => this.handleStateChange(event.payload))
         );
@@ -50,6 +63,30 @@ class OverlayManager {
         );
     }
 
+    private async initializeScene() {
+        let overlayStyle = "surreal";
+        try {
+            const settings = await invoke<{ overlay_style: string }>("get_settings");
+            overlayStyle = settings.overlay_style;
+        } catch (err) {
+            console.error("[Overlay] Falha ao ler overlay_style, usando padrão", err);
+        }
+
+        const surrealWrap = document.getElementById("surreal-wrap") as HTMLElement;
+        const orbWrap = document.getElementById("orb-wrap") as HTMLElement;
+
+        if (overlayStyle === "orb") {
+            orbWrap.hidden = false;
+            surrealWrap.hidden = true;
+            return;
+        }
+
+        orbWrap.hidden = true;
+        surrealWrap.hidden = false;
+        this.scene = createSurrealScene();
+        this.scene.mount(surrealWrap);
+    }
+
     private handleStateChange(payload: EnginePayload) {
         const state = payload.state;
         if (!state) return;
@@ -58,6 +95,7 @@ class OverlayManager {
 
         this.currentState = state;
         this.updateStateClass(state);
+        this.scene?.setState(toSurrealState(state));
 
         if (state === "speaking") {
             this.show();
@@ -88,6 +126,7 @@ class OverlayManager {
 
         this.container.style.setProperty("--mic-level", String(mic));
         this.container.style.setProperty("--model-level", String(model));
+        this.scene?.setLevel(mic, model);
 
         if (this.currentState === "listening" && mic > MIC_THRESHOLD) {
             this.show();
@@ -101,6 +140,7 @@ class OverlayManager {
         this.setModelLine(message, "error");
         this.currentState = "error";
         this.updateStateClass("error");
+        this.scene?.setState("error");
         this.show();
         this.hideAfterDelay(ERROR_HIDE_DELAY_MS);
     }
@@ -149,6 +189,7 @@ class OverlayManager {
         if (this.hideTimer !== null) {
             clearTimeout(this.hideTimer);
         }
+        this.scene?.unmount();
     }
 }
 

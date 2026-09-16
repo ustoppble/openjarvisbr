@@ -10,6 +10,18 @@ use serde::{Deserialize, Serialize};
 
 const ENV_KEY: &str = "GEMINI_API_KEY";
 
+/// Padrão quando `overlay_style` está ausente ou inválido no config.toml.
+const DEFAULT_OVERLAY_STYLE: &str = "surreal";
+
+/// "surreal" e "orb" são os únicos valores aceitos; qualquer outro cai no
+/// padrão em vez de propagar um estilo desconhecido pro overlay.
+fn normalize_overlay_style(value: Option<String>) -> String {
+    match value.as_deref() {
+        Some("orb") => "orb".to_string(),
+        _ => DEFAULT_OVERLAY_STYLE.to_string(),
+    }
+}
+
 #[derive(Debug, Clone, Deserialize, Default)]
 struct FileConfig {
     /// Nome documentado no README e no roteiro de testes.
@@ -29,6 +41,9 @@ struct FileConfig {
     /// Como a pessoa quer ser chamada. Ausente = o Jarvis ainda não sabe o
     /// nome e pergunta na primeira conversa.
     user_name: Option<String>,
+    /// Visual do overlay: "surreal" (cena 3D, padrão) ou "orb" (orb de 7
+    /// pontos, mais leve).
+    overlay_style: Option<String>,
 }
 
 /// Marcador substituído pelo nome (ou por "você", sem nome) num
@@ -105,6 +120,12 @@ pub struct Settings {
     pub voice_fx: Option<String>,
     pub voice_fx_amount: Option<f32>,
     pub user_name: Option<String>,
+    pub overlay_style: Option<String>,
+}
+
+/// Estilo do overlay já resolvido: `surreal` (padrão) ou `orb`.
+pub fn effective_overlay_style(settings: &Settings) -> String {
+    normalize_overlay_style(settings.overlay_style.clone())
 }
 
 impl FileConfig {
@@ -128,6 +149,7 @@ struct FileConfigOut {
     voice_fx: Option<String>,
     voice_fx_amount: Option<f32>,
     user_name: Option<String>,
+    overlay_style: String,
 }
 
 /// Campos que a janela de configurações grava. `api_key` só vem preenchido
@@ -143,6 +165,7 @@ pub struct SaveSettings {
     pub barge_in: Option<bool>,
     pub voice_fx_amount: Option<f32>,
     pub user_name: Option<String>,
+    pub overlay_style: String,
 }
 
 #[derive(Debug)]
@@ -215,6 +238,7 @@ pub fn load_settings() -> Settings {
         voice_fx: parsed.voice_fx.filter(|s| !s.trim().is_empty()),
         voice_fx_amount: parsed.voice_fx_amount,
         user_name: parsed.user_name.filter(|s| !s.trim().is_empty()),
+        overlay_style: parsed.overlay_style,
     }
 }
 
@@ -272,6 +296,7 @@ pub fn save(update: SaveSettings) -> Result<(), ConfigError> {
         voice_fx: existing.voice_fx,
         voice_fx_amount: update.voice_fx_amount,
         user_name: update.user_name.filter(|s| !s.trim().is_empty()),
+        overlay_style: normalize_overlay_style(Some(update.overlay_style)),
     };
 
     let toml_str = toml::to_string_pretty(&out).map_err(ConfigError::SerializeFile)?;
@@ -363,6 +388,7 @@ mod tests {
             barge_in: Some(false),
             voice_fx_amount: Some(0.5),
             system_prompt: Some("seja breve".to_string()),
+            overlay_style: "orb".to_string(),
             ..Default::default()
         })
         .expect("segundo save preserva a chave existente");
@@ -380,8 +406,17 @@ mod tests {
         assert_eq!(settings.barge_in, Some(false));
         assert_eq!(settings.voice_fx_amount, Some(0.5));
         assert_eq!(settings.system_prompt.as_deref(), Some("seja breve"));
+        assert_eq!(effective_overlay_style(&settings), "orb");
 
         drop(home);
+    }
+
+    #[test]
+    fn overlay_style_falls_back_to_surreal_when_absent_or_invalid() {
+        assert_eq!(normalize_overlay_style(None), "surreal");
+        assert_eq!(normalize_overlay_style(Some("".to_string())), "surreal");
+        assert_eq!(normalize_overlay_style(Some("bogus".to_string())), "surreal");
+        assert_eq!(normalize_overlay_style(Some("orb".to_string())), "orb");
     }
 
     #[test]

@@ -146,6 +146,20 @@
             filter: saturate(0.2);
         }
 
+        /* Cena 3D surreal — docs/design/openjarvisbr-surreal.html, via src/overlay/surreal.ts */
+        .surreal-wrap {
+            position: relative;
+            width: 168px;
+            height: 168px;
+            flex: 0 0 auto;
+        }
+
+        .surreal-wrap canvas {
+            width: 100%;
+            height: 100%;
+            display: block;
+        }
+
         .state-dot {
             position: absolute;
             top: -2px;
@@ -203,7 +217,8 @@
 <body>
     <div id="app" class="overlay-container">
         <div class="overlay-card">
-            <div class="orb-wrap">
+            <div id="surreal-wrap" class="surreal-wrap" hidden></div>
+            <div id="orb-wrap" class="orb-wrap">
                 <svg class="orb" viewBox="0 0 100 100" aria-hidden="true">
                     <g class="orb-dots">
                         <circle class="orb-dot primary" cx="50" cy="10" r="4"></circle>

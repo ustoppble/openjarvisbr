@@ -4,7 +4,8 @@
 
 use openjarvisbr_core::audio::{capture::list_input_devices, playback::list_output_devices};
 use openjarvisbr_core::config::{
-    default_system_prompt, load_api_key, load_settings, save, SaveSettings,
+    default_system_prompt, effective_overlay_style, load_api_key, load_settings, save,
+    SaveSettings,
 };
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager};
@@ -23,6 +24,7 @@ pub struct SettingsPayload {
     pub system_prompt: String,
     pub default_system_prompt: String,
     pub user_name: String,
+    pub overlay_style: String,
 }
 
 /// Estado atual do config.toml, pronto para preencher o formulário. A chave
@@ -32,6 +34,7 @@ pub struct SettingsPayload {
 pub fn get_settings() -> SettingsPayload {
     let key = load_api_key().ok();
     let settings = load_settings();
+    let overlay_style = effective_overlay_style(&settings);
     SettingsPayload {
         has_api_key: key.is_some(),
         api_key_chars: key.map(|k| k.chars().count()).unwrap_or(0),
@@ -46,6 +49,7 @@ pub fn get_settings() -> SettingsPayload {
             .unwrap_or_else(|| default_system_prompt(settings.user_name.as_deref())),
         default_system_prompt: default_system_prompt(settings.user_name.as_deref()),
         user_name: settings.user_name.clone().unwrap_or_default(),
+        overlay_style,
     }
 }
 
@@ -76,6 +80,7 @@ pub struct SaveSettingsPayload {
     pub voice_fx_amount: f32,
     pub system_prompt: String,
     pub user_name: String,
+    pub overlay_style: String,
 }
 
 /// Ajusta a intensidade do efeito de voz na sessão em andamento, sem
@@ -117,6 +122,7 @@ pub async fn save_settings(app: AppHandle, payload: SaveSettingsPayload) -> Resu
         barge_in: Some(payload.barge_in),
         voice_fx_amount: Some(payload.voice_fx_amount),
         user_name: Some(payload.user_name.clone()),
+        overlay_style: payload.overlay_style.clone(),
     })
     .map_err(|err| err.to_string())?;
 

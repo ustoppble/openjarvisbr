@@ -22,6 +22,7 @@ interface SettingsPayload {
   system_prompt: string;
   default_system_prompt: string;
   user_name: string;
+  overlay_style: string;
 }
 
 interface DevicesPayload {
@@ -50,6 +51,7 @@ const deviceOutSelect = $<HTMLSelectElement>("device-out");
 const fxAmountInput = $<HTMLInputElement>("fx-amount");
 const fxAmountValue = $<HTMLSpanElement>("fx-amount-value");
 const bargeInCheckbox = $<HTMLInputElement>("barge-in");
+const overlayStyleSelect = $<HTMLSelectElement>("overlay-style");
 const systemPromptTextarea = $<HTMLTextAreaElement>("system-prompt");
 const restorePromptButton = $<HTMLButtonElement>("restore-prompt");
 const saveButton = $<HTMLButtonElement>("save");
@@ -126,6 +128,7 @@ async function load() {
 
   bargeInCheckbox.checked = settings.barge_in;
   systemPromptTextarea.value = settings.system_prompt;
+  overlayStyleSelect.value = settings.overlay_style;
 
   const pendingError = await invoke<SettingsErrorPayload | null>("take_pending_error");
   if (pendingError) {
@@ -168,6 +171,7 @@ saveButton.addEventListener("click", async () => {
         barge_in: bargeInCheckbox.checked,
         voice_fx_amount: Number(fxAmountInput.value),
         system_prompt: systemPromptTextarea.value,
+        overlay_style: overlayStyleSelect.value,
       },
     });
     apiKeyInput.value = "";
