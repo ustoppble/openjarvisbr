@@ -52,6 +52,8 @@ type Stream = SplitStream<Socket>;
 pub struct LiveConfig {
     pub api_key: String,
     pub voice: String,
+    /// Grava cada mensagem crua do servidor (uma por linha) para diagnóstico.
+    pub raw_log: Option<std::path::PathBuf>,
 }
 
 impl LiveConfig {
@@ -59,7 +61,13 @@ impl LiveConfig {
         LiveConfig {
             api_key: api_key.into(),
             voice: voice.into(),
+            raw_log: None,
         }
+    }
+
+    pub fn with_raw_log(mut self, path: std::path::PathBuf) -> Self {
+        self.raw_log = Some(path);
+        self
     }
 
     /// URL completa com a chave. Uso interno exclusivo do handshake.
@@ -324,33 +332,36 @@ impl Worker {
             }
         };
 
-        let event = match protocol::parse(&raw) {
-            Ok(event) => event,
+        if let Some(path) = &self.cfg.raw_log {
+            use std::io::Write;
+            if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
+                let _ = writeln!(f, "{raw}");
+            }
+        }
+
+        let events = match protocol::parse_all(&raw) {
+            Ok(events) => events,
             Err(ProtocolError::NoEvent) => return Step::Continue,
             Err(err) => {
-                debug!(erro = %err, "mensagem ignorada");
+                warn!(erro = %err, bytes = raw.len(), "mensagem do servidor ignorada");
                 return Step::Continue;
             }
         };
 
-        let step = match &event {
-            ServerEvent::UserText(text) => {
-                self.history.push(Speaker::User, text);
-                Step::Continue
+        let mut step = Step::Continue;
+        for event in events {
+            match &event {
+                ServerEvent::UserText(text) => self.history.push(Speaker::User, text),
+                ServerEvent::ModelText(text) => self.history.push(Speaker::Model, text),
+                ServerEvent::GoAway => {
+                    info!(host = HOST, "goAway recebido, reconectando");
+                    step = Step::Reconnect;
+                }
+                _ => {}
             }
-            ServerEvent::ModelText(text) => {
-                self.history.push(Speaker::Model, text);
-                Step::Continue
+            if self.event_tx.send(event).await.is_err() {
+                return Step::Stop;
             }
-            ServerEvent::GoAway => {
-                info!(host = HOST, "goAway recebido, reconectando");
-                Step::Reconnect
-            }
-            _ => Step::Continue,
-        };
-
-        if self.event_tx.send(event).await.is_err() {
-            return Step::Stop;
         }
         step
     }

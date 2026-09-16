@@ -206,7 +206,6 @@ struct ServerContent {
     #[serde(default)]
     output_transcription: Option<Transcription>,
     #[serde(default)]
-    #[allow(dead_code)]
     turn_complete: bool,
 }
 
@@ -292,33 +291,51 @@ impl From<serde_json::Error> for ProtocolError {
     }
 }
 
-/// Interpreta uma mensagem JSON recebida do servidor da Live API.
-pub fn parse(raw: &str) -> Result<ServerEvent, ProtocolError> {
+/// Interpreta uma mensagem JSON recebida do servidor da Live API e devolve
+/// TODOS os eventos que ela carrega, na ordem: interrupção, transcrições,
+/// áudio, fim de turno. Uma mensagem pode trazer transcrição e áudio juntos;
+/// devolver só o primeiro (comportamento antigo) descartava chunks de áudio
+/// e a voz saía com pedaços faltando.
+pub fn parse_all(raw: &str) -> Result<Vec<ServerEvent>, ProtocolError> {
     let message: ServerMessage = serde_json::from_str(raw)?;
+    let mut events = Vec::new();
 
     if message.go_away.is_some() {
-        return Ok(ServerEvent::GoAway);
+        events.push(ServerEvent::GoAway);
     }
 
     if let Some(content) = message.server_content {
         if content.interrupted {
-            return Ok(ServerEvent::Interrupted);
+            events.push(ServerEvent::Interrupted);
         }
         if let Some(t) = content.input_transcription {
-            return Ok(ServerEvent::UserText(t.text));
+            events.push(ServerEvent::UserText(t.text));
         }
         if let Some(t) = content.output_transcription {
-            return Ok(ServerEvent::ModelText(t.text));
+            events.push(ServerEvent::ModelText(t.text));
         }
         if let Some(turn) = content.model_turn {
-            return decode_audio(&turn);
+            match decode_audio(&turn) {
+                Ok(audio) => events.push(audio),
+                Err(ProtocolError::NoEvent) => {}
+                Err(err) => return Err(err),
+            }
         }
         if content.turn_complete {
-            return Ok(ServerEvent::TurnComplete);
+            events.push(ServerEvent::TurnComplete);
         }
     }
 
-    Err(ProtocolError::NoEvent)
+    if events.is_empty() {
+        return Err(ProtocolError::NoEvent);
+    }
+    Ok(events)
+}
+
+/// Primeiro evento da mensagem. Mantido para os testes de fixture; o
+/// caminho de produção usa `parse_all`.
+pub fn parse(raw: &str) -> Result<ServerEvent, ProtocolError> {
+    parse_all(raw).map(|mut events| events.remove(0))
 }
 
 fn decode_audio(turn: &ModelTurn) -> Result<ServerEvent, ProtocolError> {
@@ -345,6 +362,17 @@ fn decode_audio(turn: &ModelTurn) -> Result<ServerEvent, ProtocolError> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn transcription_and_audio_in_one_message_yield_both_events() {
+        // 4 amostras i16 LE: 1, -1, 2, -2 → base64
+        let raw = r#"{"serverContent":{"outputTranscription":{"text":"oi"},"modelTurn":{"parts":[{"inlineData":{"mimeType":"audio/pcm;rate=24000","data":"AQD//wIA/v8="}}]},"turnComplete":true}}"#;
+        let events = parse_all(raw).unwrap();
+        assert_eq!(events.len(), 3, "{events:?}");
+        assert_eq!(events[0], ServerEvent::ModelText("oi".into()));
+        assert_eq!(events[1], ServerEvent::Audio(vec![1, -1, 2, -2]));
+        assert_eq!(events[2], ServerEvent::TurnComplete);
+    }
+
     #[test]
     fn turn_complete_alone_is_an_event() {
         let raw = r#"{"serverContent":{"turnComplete":true}}"#;

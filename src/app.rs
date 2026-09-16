@@ -129,7 +129,11 @@ impl App {
     pub async fn run(&mut self) -> i32 {
         self.state = State::Connecting;
         info!("conectando à Live API");
-        let cfg = LiveConfig::new(self.config.api_key.clone(), self.config.voice.clone());
+        let mut cfg = LiveConfig::new(self.config.api_key.clone(), self.config.voice.clone());
+        if let Some(dir) = &self.config.record_dir {
+            let _ = std::fs::create_dir_all(dir);
+            cfg = cfg.with_raw_log(dir.join("raw.jsonl"));
+        }
         let mut session = match LiveSession::connect(cfg).await {
             Ok(session) => session,
             Err(err) => {
