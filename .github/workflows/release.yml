@@ -1,0 +1,59 @@
+name: Release
+
+# Gera só os instaladores Windows (x86_64-pc-windows-msvc: .msi e .exe NSIS) e
+# anexa na GitHub Release da tag. O .dmg do Mac é compilado localmente e anexado à
+# mão na mesma release (ver README, seção "Baixar").
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag da release (ex.: v0.2.0). Criada no commit atual se não existir.'
+        required: true
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  windows:
+    name: x86_64-pc-windows-msvc
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - uses: Swatinem/rust-cache@v2
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/desktop/package-lock.json
+
+      - name: npm ci
+        working-directory: apps/desktop
+        run: npm ci
+
+      # Sem assinatura por enquanto: nenhum segredo além do GITHUB_TOKEN padrão.
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          projectPath: apps/desktop
+          tagName: ${{ inputs.tag || github.ref_name }}
+          releaseName: OpenJarvisBR ${{ inputs.tag || github.ref_name }}
+          releaseBody: |
+            Instaladores do OpenJarvisBR.
+            - **Windows x64:** `.msi` ou `-setup.exe`. Sem assinatura: o SmartScreen pode avisar (Mais informações › Executar assim mesmo).
+            - **macOS:** `.dmg` compilado localmente e anexado à mão. Sem assinatura: na primeira vez, botão direito › Abrir.
+          releaseDraft: false
+          prerelease: false
+          args: --target x86_64-pc-windows-msvc

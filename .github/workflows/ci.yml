@@ -1,0 +1,65 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    # Só Windows: o build do Mac é feito localmente pelo mantenedor.
+    name: windows
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/desktop/package-lock.json
+
+      - name: npm ci
+        working-directory: apps/desktop
+        run: npm ci
+
+      # O crate Tauri embute apps/desktop/dist em tempo de compilação: o frontend
+      # precisa existir antes de cargo test/clippy no workspace.
+      - name: Build do frontend
+        working-directory: apps/desktop
+        run: npm run build
+
+      - name: cargo test
+        run: cargo test --workspace
+
+      - name: cargo clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: tauri build (sem publicar)
+        working-directory: apps/desktop
+        run: npm run tauri build
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: openjarvisbr-windows
+          if-no-files-found: error
+          path: |
+            target/release/bundle/msi/*.msi
+            target/release/bundle/nsis/*.exe

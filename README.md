@@ -6,6 +6,28 @@ Assistente de voz open source, em Rust, que conversa com você em tempo real usa
 > Status: **v1 em construção**. O degrau 1 (só conversa) está sendo implementado card a
 > card. Ainda não há binário pronto pra uso.
 
+## Baixar
+
+Os instaladores ficam na [página de releases](https://github.com/ustoppble/openjarvisbr/releases).
+
+- **Windows (x64):** baixe o `.msi` ou o `-setup.exe` da última release. Eles são gerados
+  pelo GitHub Actions (`.github/workflows/release.yml`) a cada tag `v*`. O instalador não
+  é assinado: o SmartScreen pode avisar — clique em **Mais informações › Executar assim
+  mesmo**.
+- **Mac:** build local (`npm run tauri build`, ver abaixo); o `.dmg` é enviado à mão para
+  a mesma release. O app não é assinado nem notarizado: na primeira vez, **botão direito
+  no app › Abrir** (ou autorize em Ajustes › Privacidade e Segurança).
+
+Para anexar o `.dmg` local a uma release que a Action já criou:
+
+```sh
+gh release upload v0.2.0 target/release/bundle/dmg/OpenJarvisBR_<versão>_aarch64.dmg
+```
+
+O CI (`.github/workflows/ci.yml`) roda em todo push e PR na `main`, só no Windows:
+`cargo test`, `cargo clippy -D warnings` e `npm run tauri build` sem publicar (os
+instaladores ficam como artefatos do run).
+
 ## O que ele faz (v1)
 
 - Escuta o microfone e responde em áudio, com latência de conversa.
