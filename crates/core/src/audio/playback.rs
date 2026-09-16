@@ -183,6 +183,16 @@ pub struct Player {
     _stream: cpal::Stream,
 }
 
+/// Lista os nomes dos dispositivos de saída disponíveis no host padrão.
+/// Espelha [`crate::audio::capture::list_input_devices`] para a janela de
+/// configurações.
+pub fn list_output_devices() -> Vec<String> {
+    let host = cpal::default_host();
+    host.output_devices()
+        .map(|devices| devices.map(|d| d.to_string()).collect())
+        .unwrap_or_default()
+}
+
 impl Player {
     /// Abre o dispositivo de saída padrão, ou o indicado por `device_name`,
     /// e prepara o reprodutor. Resampleia se o dispositivo não aceitar

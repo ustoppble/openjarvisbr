@@ -5,32 +5,227 @@
     <title>OpenJarvisBR — Configurações</title>
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <style>
+      :root {
+        color-scheme: dark;
+      }
+      * {
+        box-sizing: border-box;
+      }
       body {
         margin: 0;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        height: 100vh;
-        background: #1a1a1f;
-        color: #e8e8ec;
-        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        width: 520px;
+        height: 640px;
+        overflow-y: auto;
+        background: #0c0c0c;
+        color: #e0e0e0;
+        font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        font-size: 13px;
       }
       main {
-        max-width: 380px;
-        text-align: center;
-        padding: 24px;
+        padding: 20px 24px 28px;
+        display: flex;
+        flex-direction: column;
+        gap: 18px;
       }
-      code {
-        background: #2a2a33;
-        padding: 2px 6px;
-        border-radius: 4px;
-        color: #a78bfa;
+      h1 {
+        font-size: 15px;
+        font-weight: 600;
+        margin: 0;
+      }
+      .banner {
+        display: none;
+        background: rgba(124, 58, 237, 0.12);
+        border: 1px solid #7c3aed;
+        color: #e0e0e0;
+        border-radius: 8px;
+        padding: 10px 12px;
+        font-size: 12px;
+        line-height: 1.5;
+      }
+      .banner.visible {
+        display: block;
+      }
+      label {
+        display: block;
+        font-size: 12px;
+        color: #9c9c9c;
+        margin-bottom: 6px;
+      }
+      .field {
+        display: flex;
+        flex-direction: column;
+      }
+      .field-hint {
+        margin-top: 6px;
+        font-size: 11px;
+        color: #7c7c7c;
+      }
+      input[type="password"],
+      input[type="text"],
+      select,
+      textarea {
+        background: #161616;
+        border: 1px solid #2a2a2a;
+        color: #e0e0e0;
+        border-radius: 6px;
+        padding: 8px 10px;
+        font-family: inherit;
+        font-size: 13px;
+        outline: none;
+      }
+      input[type="password"]:focus,
+      input[type="text"]:focus,
+      select:focus,
+      textarea:focus {
+        border-color: #7c3aed;
+      }
+      textarea {
+        resize: vertical;
+        min-height: 120px;
+        line-height: 1.5;
+      }
+      .row {
+        display: flex;
+        gap: 12px;
+      }
+      .row .field {
+        flex: 1;
+      }
+      .range-row {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+      }
+      input[type="range"] {
+        flex: 1;
+        accent-color: #7c3aed;
+      }
+      .range-value {
+        width: 34px;
+        text-align: right;
+        color: #9c9c9c;
+        font-variant-numeric: tabular-nums;
+      }
+      .checkbox-row {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+      .checkbox-row label {
+        margin: 0;
+        color: #e0e0e0;
+      }
+      input[type="checkbox"] {
+        accent-color: #7c3aed;
+        width: 15px;
+        height: 15px;
+      }
+      .prompt-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+      }
+      .prompt-header label {
+        margin: 0;
+      }
+      button {
+        font-family: inherit;
+        font-size: 12px;
+        border-radius: 6px;
+        border: 1px solid #2a2a2a;
+        background: #161616;
+        color: #e0e0e0;
+        padding: 6px 10px;
+        cursor: pointer;
+      }
+      button:hover {
+        border-color: #7c3aed;
+      }
+      .actions {
+        display: flex;
+        justify-content: flex-end;
+        gap: 10px;
+        margin-top: 4px;
+      }
+      .actions button.primary {
+        background: #7c3aed;
+        border-color: #7c3aed;
+        color: #fff;
+        padding: 8px 18px;
+        font-weight: 600;
+      }
+      .actions button.primary:hover {
+        background: #6d28d9;
+      }
+      .status {
+        font-size: 11px;
+        color: #7c7c7c;
+        min-height: 14px;
+      }
+      .status.error {
+        color: #f87171;
+      }
+      .status.ok {
+        color: #34d399;
       }
     </style>
   </head>
   <body>
     <main id="app">
-      <p>configure a chave em <code>~/.config/jarvis/config.toml</code></p>
+      <h1>Configurações</h1>
+      <div class="banner" id="no-key-banner">
+        Nenhuma chave configurada. Cole a chave do Gemini abaixo e salve para
+        ligar a OpenJarvisBR.
+      </div>
+
+      <div class="field">
+        <label for="api-key">Chave da API (Gemini)</label>
+        <input type="password" id="api-key" autocomplete="off" placeholder="cole a chave aqui para trocá-la" />
+        <div class="field-hint" id="api-key-hint"></div>
+      </div>
+
+      <div class="field">
+        <label for="voice">Voz</label>
+        <select id="voice"></select>
+      </div>
+
+      <div class="row">
+        <div class="field">
+          <label for="device-in">Microfone</label>
+          <select id="device-in"></select>
+        </div>
+        <div class="field">
+          <label for="device-out">Saída</label>
+          <select id="device-out"></select>
+        </div>
+      </div>
+
+      <div class="field">
+        <label for="fx-amount">Intensidade do efeito</label>
+        <div class="range-row">
+          <input type="range" id="fx-amount" min="0" max="1" step="0.01" />
+          <span class="range-value" id="fx-amount-value">0.35</span>
+        </div>
+      </div>
+
+      <div class="checkbox-row">
+        <input type="checkbox" id="barge-in" />
+        <label for="barge-in">Barge-in (interromper falando por cima)</label>
+      </div>
+
+      <div class="field">
+        <div class="prompt-header">
+          <label for="system-prompt">System prompt</label>
+          <button type="button" id="restore-prompt">Restaurar padrão</button>
+        </div>
+        <textarea id="system-prompt" spellcheck="false"></textarea>
+      </div>
+
+      <div class="actions">
+        <span class="status" id="status"></span>
+        <button type="button" class="primary" id="save">Salvar</button>
+      </div>
     </main>
+    <script type="module" src="/src/settings/main.ts"></script>
   </body>
 </html>

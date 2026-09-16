@@ -4,6 +4,8 @@
 // (JRV-32) e a janela de configurações (JRV-33) consumirem.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod commands;
+
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 
@@ -15,14 +17,17 @@ use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 use tokio::sync::broadcast;
 
+use commands::settings::{get_settings, list_devices, save_settings, set_fx_amount};
+
 const MUTE_SHORTCUT: &str = "CmdOrCtrl+Shift+J";
 const TRAY_ID: &str = "main";
 
 /// Estado compartilhado do app: o handle do motor (ausente sem chave) e o
 /// item de menu "Mutar/Desmutar", guardado para trocar o texto sem
-/// reconstruir o menu inteiro.
-struct AppState {
-    engine: Mutex<Option<EngineHandle>>,
+/// reconstruir o menu inteiro. `pub(crate)` para os comandos de
+/// `commands::settings` lerem/reiniciarem o motor.
+pub(crate) struct AppState {
+    pub(crate) engine: Mutex<Option<EngineHandle>>,
     mute_item: Mutex<Option<MenuItem<tauri::Wry>>>,
     muted: AtomicBool,
 }
@@ -110,7 +115,7 @@ fn open_settings_window(app: &AppHandle) {
         }
         let _ = WebviewWindowBuilder::new(&handle, "settings", WebviewUrl::App("settings.html".into()))
             .title("OpenJarvisBR — Configurações")
-            .inner_size(420.0, 220.0)
+            .inner_size(520.0, 640.0)
             .resizable(false)
             .center()
             .build();
@@ -167,6 +172,39 @@ async fn forward_events(app: AppHandle, mut events: broadcast::Receiver<EngineEv
     }
 }
 
+/// Monta a `EngineConfig` a partir da chave e do config.toml atuais.
+fn build_engine_config(api_key: String) -> EngineConfig {
+    let settings = load_settings();
+    EngineConfig {
+        api_key,
+        voice: settings.voice.unwrap_or_else(|| "Puck".to_string()),
+        device_in: settings.device_in,
+        device_out: settings.device_out,
+        barge_in: settings.barge_in.unwrap_or(false),
+        record_dir: None,
+        system_prompt: settings
+            .system_prompt
+            .unwrap_or_else(|| DEFAULT_SYSTEM_PROMPT.to_string()),
+        fx_amount: settings.voice_fx_amount.unwrap_or(0.35),
+    }
+}
+
+/// Derruba o motor em execução (se houver) e sobe de novo com o config.toml
+/// atual — chamado pela janela de configurações depois de salvar voz,
+/// dispositivos, barge-in ou system prompt, que só entram em vigor no
+/// próximo `Engine::start`.
+pub(crate) async fn restart_engine(app: AppHandle) {
+    let old = {
+        let state = app.state::<AppState>();
+        let mut guard = state.engine.lock().unwrap_or_else(|e| e.into_inner());
+        guard.take()
+    };
+    if let Some(engine) = old {
+        engine.stop().await;
+    }
+    spawn_startup(app);
+}
+
 /// Carrega chave e config, sobe o motor e passa a reemitir seus eventos.
 /// Sem chave (ou falha ao conectar), abre a janela de configurações vazia e
 /// deixa a bandeja em erro — nunca expõe a chave em log.
@@ -182,19 +220,7 @@ fn spawn_startup(app: AppHandle) {
             }
         };
 
-        let settings = load_settings();
-        let config = EngineConfig {
-            api_key,
-            voice: settings.voice.unwrap_or_else(|| "Puck".to_string()),
-            device_in: settings.device_in,
-            device_out: settings.device_out,
-            barge_in: settings.barge_in.unwrap_or(false),
-            record_dir: None,
-            system_prompt: settings
-                .system_prompt
-                .unwrap_or_else(|| DEFAULT_SYSTEM_PROMPT.to_string()),
-            fx_amount: settings.voice_fx_amount.unwrap_or(0.35),
-        };
+        let config = build_engine_config(api_key);
 
         match Engine::start(config).await {
             Ok(handle) => {
@@ -247,7 +273,15 @@ fn main() {
             mute_item: Mutex::new(None),
             muted: AtomicBool::new(false),
         })
-        .invoke_handler(tauri::generate_handler![set_mute, reconnect, quit])
+        .invoke_handler(tauri::generate_handler![
+            set_mute,
+            reconnect,
+            quit,
+            get_settings,
+            list_devices,
+            save_settings,
+            set_fx_amount
+        ])
         .setup(|app| {
             let handle = app.handle().clone();
 
