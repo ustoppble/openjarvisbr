@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OpenJarvisBR — Overlay</title>
+    <style>
+        /* CSS Reset */
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        html, body {
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+        }
+
+        body {
+            background: transparent;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            font-size: 14px;
+            line-height: 1.5;
+        }
+
+        /* Design System Variables (from JRV-28 spec) */
+        :root {
+            /* Primary Palette */
+            --color-primary: #7c3aed;        /* Purple (Perplexity Orb base) */
+            --color-primary-light: #a78bfa;
+            --color-primary-dark: #5b21b6;
+
+            /* Accent Palette */
+            --color-accent: #06b6d4;         /* Cyan (Raycast fusion) */
+            --color-accent-light: #22d3ee;
+            --color-accent-dark: #0891b2;
+
+            /* State Colors */
+            --color-listening: #06b6d4;      /* Cyan for active listening */
+            --color-speaking: #7c3aed;       /* Purple for speaking */
+            --color-muted: #6b7280;          /* Gray for muted */
+            --color-error: #ef4444;          /* Red for errors */
+
+            /* Neutral */
+            --color-bg-dark: #0f172a;        /* Dark background */
+            --color-bg-light: #f8fafc;       /* Light background */
+            --color-text: #ffffff;           /* Text on dark */
+            --color-text-dim: #cbd5e1;       /* Dimmed text */
+
+            /* Effects */
+            --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.05);
+            --shadow-md: 0 4px 6px rgba(0, 0, 0, 0.1);
+            --shadow-lg: 0 10px 15px rgba(0, 0, 0, 0.2);
+            --shadow-glow: 0 0 20px rgba(124, 58, 237, 0.4);
+
+            /* Typography */
+            --font-size-xs: 12px;
+            --font-size-sm: 14px;
+            --font-size-base: 16px;
+            --font-size-lg: 18px;
+            --font-size-xl: 20px;
+
+            --font-weight-normal: 400;
+            --font-weight-medium: 500;
+            --font-weight-semibold: 600;
+            --font-weight-bold: 700;
+
+            /* Spacing */
+            --spacing-xs: 4px;
+            --spacing-sm: 8px;
+            --spacing-md: 16px;
+            --spacing-lg: 24px;
+            --spacing-xl: 32px;
+
+            /* Transitions */
+            --transition-fast: 150ms ease-in-out;
+            --transition-normal: 300ms ease-in-out;
+            --transition-slow: 500ms ease-in-out;
+        }
+
+        /* Overlay Container */
+        .overlay-container {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            visibility: hidden;
+            opacity: 0;
+            transition: opacity var(--transition-normal), visibility var(--transition-normal);
+            pointer-events: none;
+        }
+
+        .overlay-container.visible {
+            visibility: visible;
+            opacity: 1;
+            pointer-events: auto;
+        }
+
+        /* State-based styling */
+        .overlay-container.listening {
+            --state-color: var(--color-listening);
+        }
+
+        .overlay-container.speaking {
+            --state-color: var(--color-speaking);
+        }
+
+        .overlay-container.muted {
+            --state-color: var(--color-muted);
+        }
+
+        .overlay-container.error {
+            --state-color: var(--color-error);
+        }
+
+        /* Base for any UI content (to be filled by pane-5644) */
+        .overlay-content {
+            width: 100%;
+            height: 100%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+    </style>
+</head>
+<body>
+    <div id="app" class="overlay-container"></div>
+    <script type="module" src="/src/overlay/overlay.ts"></script>
+</body>
+</html>

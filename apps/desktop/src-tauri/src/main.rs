@@ -122,6 +122,23 @@ fn open_settings_window(app: &AppHandle) {
     });
 }
 
+fn open_overlay_window(app: &AppHandle) {
+    let handle = app.clone();
+    let _ = app.run_on_main_thread(move || {
+        if handle.get_webview_window("overlay").is_some() {
+            // Overlay já existe, deixa ele gerenciar sua visibilidade via eventos
+            return;
+        }
+        let _ = WebviewWindowBuilder::new(&handle, "overlay", WebviewUrl::App("overlay/overlay.html".into()))
+            .decorations(false)
+            .always_on_top(true)
+            .skip_taskbar(true)
+            .inner_size(420.0, 140.0)
+            .position(100.0, 50.0)
+            .build();
+    });
+}
+
 fn handle_menu_event(app: &AppHandle, id: &str) {
     match id {
         "mute" => toggle_mute(app),
@@ -229,6 +246,7 @@ fn spawn_startup(app: AppHandle) {
                     let state = app.state::<AppState>();
                     *state.engine.lock().unwrap_or_else(|e| e.into_inner()) = Some(handle);
                 }
+                open_overlay_window(&app);
                 forward_events(app, events).await;
             }
             Err(err) => {
