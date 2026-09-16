@@ -58,6 +58,56 @@ impl From<rubato::ResamplerConstructionError> for PlaybackError {
     }
 }
 
+/// Fila compartilhada com o callback de áudio.
+///
+/// `primed` implementa um jitter buffer: o callback só começa a drenar
+/// quando há pelo menos `prebuffer` amostras acumuladas (ou quando `drain`
+/// foi pedido no fim do turno), e volta a esperar quando a fila esvazia.
+/// Sem isso, cada vão entre pacotes de rede virava um estalo de silêncio
+/// no meio da frase.
+struct Queue {
+    samples: VecDeque<i16>,
+    primed: bool,
+    drain: bool,
+    prebuffer: usize,
+}
+
+impl Queue {
+    fn new(prebuffer: usize) -> Self {
+        Self {
+            samples: VecDeque::new(),
+            primed: false,
+            drain: false,
+            prebuffer,
+        }
+    }
+
+    fn clear(&mut self) {
+        self.samples.clear();
+        self.primed = false;
+        self.drain = false;
+    }
+
+    /// Próxima amostra a tocar, ou silêncio enquanto o buffer enche.
+    fn next_sample(&mut self) -> i16 {
+        if !self.primed {
+            if self.samples.len() >= self.prebuffer || (self.drain && !self.samples.is_empty()) {
+                self.primed = true;
+            } else {
+                return 0;
+            }
+        }
+        match self.samples.pop_front() {
+            Some(sample) => sample,
+            None => {
+                self.primed = false;
+                self.drain = false;
+                0
+            }
+        }
+    }
+}
+
 /// Estado do resampler quando o dispositivo não aceita 24kHz nativamente.
 struct Resampling {
     engine: Async<f32>,
@@ -67,7 +117,7 @@ struct Resampling {
 /// Reprodutor de PCM i16 24kHz mono. `push` enfileira, `flush` descarta a
 /// fila (interrupção).
 pub struct Player {
-    queue: Arc<Mutex<VecDeque<i16>>>,
+    queue: Arc<Mutex<Queue>>,
     resampling: Option<Mutex<Resampling>>,
     device_channels: usize,
     _stream: cpal::Stream,
@@ -104,7 +154,9 @@ impl Player {
         let sample_format = config.sample_format();
         let stream_config: StreamConfig = config.into();
 
-        let queue: Arc<Mutex<VecDeque<i16>>> = Arc::new(Mutex::new(VecDeque::new()));
+        // ~200ms de áudio antes de começar a tocar cada resposta.
+        let prebuffer = device_rate as usize * device_channels / 5;
+        let queue: Arc<Mutex<Queue>> = Arc::new(Mutex::new(Queue::new(prebuffer)));
         let stream = build_stream(&device, &stream_config, sample_format, queue.clone())?;
         stream.play()?;
 
@@ -174,7 +226,7 @@ impl Player {
         let mut queue = self.queue.lock().unwrap_or_else(|e| e.into_inner());
         for &sample in samples {
             for _ in 0..self.device_channels {
-                queue.push_back(sample);
+                queue.samples.push_back(sample);
             }
         }
     }
@@ -185,7 +237,7 @@ impl Player {
             let clamped = sample.round().clamp(i16::MIN as f32, i16::MAX as f32);
             let value = clamped as i16;
             for _ in 0..self.device_channels {
-                queue.push_back(value);
+                queue.samples.push_back(value);
             }
         }
     }
@@ -197,7 +249,17 @@ impl Player {
             .queue
             .lock()
             .unwrap_or_else(|e| e.into_inner())
+            .samples
             .is_empty()
+    }
+
+    /// O modelo terminou o turno: toca o que restou na fila mesmo que seja
+    /// menor que o prebuffer.
+    pub fn end_of_turn(&self) {
+        self.queue
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .drain = true;
     }
 
     pub fn flush(&self) {
@@ -219,7 +281,7 @@ fn build_stream(
     device: &cpal::Device,
     config: &StreamConfig,
     sample_format: SampleFormat,
-    queue: Arc<Mutex<VecDeque<i16>>>,
+    queue: Arc<Mutex<Queue>>,
 ) -> Result<cpal::Stream, PlaybackError> {
     let stream = match sample_format {
         SampleFormat::I16 => build_typed_stream::<i16>(device, config, queue)?,
@@ -236,7 +298,7 @@ fn build_stream(
 fn build_typed_stream<T>(
     device: &cpal::Device,
     config: &StreamConfig,
-    queue: Arc<Mutex<VecDeque<i16>>>,
+    queue: Arc<Mutex<Queue>>,
 ) -> Result<cpal::Stream, PlaybackError>
 where
     T: SizedSample + FromSample<i16> + Send + 'static,
@@ -246,8 +308,7 @@ where
         move |data: &mut [T], _info: &cpal::OutputCallbackInfo| {
             let mut q = queue.lock().unwrap_or_else(|e| e.into_inner());
             for sample in data.iter_mut() {
-                let value = q.pop_front().unwrap_or(0);
-                *sample = T::from_sample(value);
+                *sample = T::from_sample(q.next_sample());
             }
         },
         |err| tracing::error!(error = %err, "erro no stream de playback"),

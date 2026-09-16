@@ -4,7 +4,7 @@
 
 use std::io::{self, Write};
 use std::sync::mpsc as std_mpsc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use colored::Colorize;
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
@@ -19,6 +19,9 @@ use crate::live::session::{LiveConfig, LiveSession};
 
 /// Capacidade dos canais internos entre threads de I/O e o loop async.
 const CHANNEL_CAPACITY: usize = 64;
+/// Folga depois do último áudio do modelo antes de reabrir o microfone no
+/// modo caixa de som: cobre os vãos entre pacotes e a cauda do alto-falante.
+const MIC_REOPEN_DELAY: Duration = Duration::from_millis(700);
 /// Intervalo de checagem de eventos de teclado (raw mode).
 const KEY_POLL_INTERVAL: Duration = Duration::from_millis(200);
 
@@ -104,6 +107,7 @@ impl App {
 
         let mut muted = false;
         let mut transcript = Transcript::default();
+        let mut last_model_audio: Option<Instant> = None;
         let exit_code = loop {
             tokio::select! {
                 chunk = audio_rx.recv() => {
@@ -112,7 +116,10 @@ impl App {
                             // Half-duplex: sem fone, o mic capta a voz do
                             // próprio Jarvis e o servidor a trata como fala
                             // do usuário. Só enviamos enquanto ele está calado.
-                            let gated = !self.config.barge_in && player.is_playing();
+                            let recently_spoke = last_model_audio
+                                .is_some_and(|t| t.elapsed() < MIC_REOPEN_DELAY);
+                            let gated = !self.config.barge_in
+                                && (player.is_playing() || recently_spoke);
                             if !muted && !gated {
                                 session.send_audio(&samples);
                             }
@@ -126,6 +133,7 @@ impl App {
                     match event {
                         Some(ServerEvent::Audio(samples)) => {
                             self.state = State::Speaking;
+                            last_model_audio = Some(Instant::now());
                             player.push(&samples);
                         }
                         Some(ServerEvent::Interrupted) => {
@@ -135,7 +143,10 @@ impl App {
                         }
                         Some(ServerEvent::UserText(text)) => transcript.user(&text),
                         Some(ServerEvent::ModelText(text)) => transcript.model(&text),
-                        Some(ServerEvent::TurnComplete) => transcript.end_line(),
+                        Some(ServerEvent::TurnComplete) => {
+                            player.end_of_turn();
+                            transcript.end_line();
+                        }
                         Some(ServerEvent::GoAway) => {
                             info!("servidor pediu encerramento (goAway); reconectando");
                         }
