@@ -7,7 +7,8 @@ on:
     branches: [main]
 
 concurrency:
-  group: ci-${{ github.ref }}
+  # Em PR, um push novo cancela o run anterior; na main cada commit tem o seu run.
+  group: ci-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:

@@ -82,7 +82,9 @@ impl Tool for McpTool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
     use crate::mcp::McpServerConfig;
+    #[cfg(unix)]
     use crate::tools::Risk;
     use serde_json::json;
 
