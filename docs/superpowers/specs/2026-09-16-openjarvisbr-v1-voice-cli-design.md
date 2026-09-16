@@ -1,11 +1,11 @@
-# SextaFeira v1 — assistente de voz em Rust (degrau 1: só conversa)
+# OpenJarvisBR v1 — assistente de voz em Rust (degrau 1: só conversa)
 
 Data: 2026-09-16
 Status: aprovado pelo dono em conversa
 
 ## Objetivo
 
-Um binário Rust, `sexta` (crate `sextafeira`), que roda no terminal do Mac (e futuramente Windows),
+Um binário Rust, `jarvis` (crate `openjarvisbr`), que roda no terminal do Mac (e futuramente Windows),
 abre uma sessão com o modelo `gemini-3.8-live` do Google e permite conversa
 contínua por voz: você fala no microfone, o modelo responde em áudio pelo
 alto-falante, com interrupção natural e transcrição visível no terminal.
@@ -36,7 +36,7 @@ entrega separada com spec própria. Esta spec cobre apenas o degrau 1.
 | Modelo | `gemini-3.8-live` | padrão de baixa latência (doc oficial) |
 | Voz padrão | `Puck` | |
 | VAD | automático (servidor) | menos código, interrupção nativa |
-| Chave | env `GEMINI_API_KEY`, senão `~/.config/sexta/config.toml` | nunca vai pro log |
+| Chave | env `GEMINI_API_KEY`, senão `~/.config/jarvis/config.toml` | nunca vai pro log |
 
 ## Arquitetura
 
@@ -68,7 +68,7 @@ src/
 4. `session` recebe:
    - áudio do modelo → empurra na fila de `playback`
    - `interrupted: true` → `playback.flush()`
-   - transcrições → imprime no terminal (você em uma cor, SextaFeira em outra)
+   - transcrições → imprime no terminal (você em uma cor, OpenJarvisBR em outra)
    - `goAway` ou erro de socket → reconecta com backoff (1s, 2s, 4s, máx 3
      tentativas), reenviando as últimas transcrições como contexto de texto
 5. Ctrl+C fecha o socket e para os streams de áudio.
@@ -110,6 +110,6 @@ headers de auth ou a URL completa com `key=`.
 ## Critério de pronto
 
 - `cargo build --release` limpo, `cargo test` verde, `cargo clippy` sem warnings.
-- Rodar `sexta`, falar "oi, quem é você" e ouvir resposta em menos de 2s.
-- Interromper a SextaFeira falando por cima e ele parar de falar.
+- Rodar `jarvis`, falar "oi, quem é você" e ouvir resposta em menos de 2s.
+- Interromper a OpenJarvisBR falando por cima e ele parar de falar.
 - Transcrição dos dois lados aparece no terminal.

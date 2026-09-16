@@ -29,7 +29,7 @@ impl fmt::Display for ConfigError {
                 f,
                 "GEMINI_API_KEY não encontrada. Configure de uma das formas:\n\
                  \x20\x201. export GEMINI_API_KEY=sua_chave\n\
-                 \x20\x202. crie ~/.config/sexta/config.toml com:\n\
+                 \x20\x202. crie ~/.config/jarvis/config.toml com:\n\
                  \x20\x20\x20\x20 gemini_api_key = \"sua_chave\""
             ),
             ConfigError::ReadFile(path, err) => {
@@ -49,13 +49,13 @@ fn config_path() -> Option<PathBuf> {
     Some(
         PathBuf::from(home)
             .join(".config")
-            .join("sexta")
+            .join("jarvis")
             .join("config.toml"),
     )
 }
 
 /// Carrega a chave da API a partir da env `GEMINI_API_KEY` ou, na ausência
-/// dela, de `~/.config/sexta/config.toml`.
+/// dela, de `~/.config/jarvis/config.toml`.
 pub fn load_api_key() -> Result<String, ConfigError> {
     if let Ok(key) = std::env::var(ENV_KEY) {
         if !key.is_empty() {

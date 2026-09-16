@@ -376,7 +376,7 @@ mod tests {
     fn parses_output_transcription_fixture() {
         let raw = fixture("output_transcription.json");
         match parse(&raw) {
-            Ok(ServerEvent::ModelText(text)) => assert_eq!(text, "eu sou a SextaFeira"),
+            Ok(ServerEvent::ModelText(text)) => assert_eq!(text, "eu sou a OpenJarvisBR"),
             other => panic!("esperava ServerEvent::ModelText, veio {other:?}"),
         }
     }
