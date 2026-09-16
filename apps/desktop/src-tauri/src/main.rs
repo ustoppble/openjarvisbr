@@ -5,6 +5,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod commands;
+mod errors;
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
@@ -18,6 +19,7 @@ use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 use tokio::sync::broadcast;
 
 use commands::settings::{get_settings, list_devices, save_settings, set_fx_amount};
+use errors::{handle_engine_error, take_pending_error};
 
 const MUTE_SHORTCUT: &str = "CmdOrCtrl+Shift+J";
 const TRAY_ID: &str = "main";
@@ -30,6 +32,9 @@ pub(crate) struct AppState {
     pub(crate) engine: Mutex<Option<EngineHandle>>,
     mute_item: Mutex<Option<MenuItem<tauri::Wry>>>,
     muted: AtomicBool,
+    /// Erro esperando a janela de configurações carregar e consumir via
+    /// `take_pending_error` (ver `errors.rs`).
+    pub(crate) pending_error: Mutex<Option<errors::SettingsErrorPayload>>,
 }
 
 fn icon_for_state(state: EngineState) -> tauri::image::Image<'static> {
@@ -60,6 +65,19 @@ fn set_tray_icon(app: &AppHandle, state: EngineState) {
     let _ = app.run_on_main_thread(move || {
         if let Some(tray) = handle.tray_by_id(TRAY_ID) {
             let _ = tray.set_icon(Some(icon_for_state(state)));
+        }
+    });
+}
+
+/// Texto ao passar o mouse na bandeja: tentativa de reconexão em andamento
+/// ou a última mensagem de erro. `None` limpa (estado normal, sem nada a
+/// dizer).
+pub(crate) fn set_tray_tooltip(app: &AppHandle, text: Option<&str>) {
+    let handle = app.clone();
+    let text = text.map(|s| s.to_string());
+    let _ = app.run_on_main_thread(move || {
+        if let Some(tray) = handle.tray_by_id(TRAY_ID) {
+            let _ = tray.set_tooltip(text.as_deref());
         }
     });
 }
@@ -105,7 +123,7 @@ fn do_reconnect(app: &AppHandle) {
     }
 }
 
-fn open_settings_window(app: &AppHandle) {
+pub(crate) fn open_settings_window(app: &AppHandle) {
     let handle = app.clone();
     let _ = app.run_on_main_thread(move || {
         if let Some(window) = handle.get_webview_window("settings") {
@@ -197,6 +215,12 @@ fn handle_engine_event(app: &AppHandle, event: EngineEvent) {
     match event {
         EngineEvent::State(state) => {
             set_tray_icon(app, state);
+            // O tooltip de erro/reconexão só é limpo ao sair do estado de
+            // erro; `Reconnecting` (abaixo) e `Error` (abaixo) o preenchem de
+            // novo na sequência.
+            if state != EngineState::Error {
+                set_tray_tooltip(app, None);
+            }
             let _ = app.emit("engine://state", serde_json::json!({ "state": state_label(state) }));
         }
         EngineEvent::UserText(text) => {
@@ -212,13 +236,18 @@ fn handle_engine_event(app: &AppHandle, event: EngineEvent) {
             let _ = app.emit("engine://level", serde_json::json!({ "mic": mic, "model": model }));
         }
         EngineEvent::Reconnecting { attempt } => {
+            set_tray_tooltip(app, Some(&format!("Reconectando… (tentativa {attempt})")));
             let _ = app.emit(
                 "engine://state",
                 serde_json::json!({ "state": "connecting", "reconnecting": true, "attempt": attempt }),
             );
         }
-        EngineEvent::Error(message) => {
-            let _ = app.emit("engine://error", message);
+        EngineEvent::Error { kind, message } => {
+            let _ = app.emit(
+                "engine://error",
+                serde_json::json!({ "kind": errors::label(kind), "message": message }),
+            );
+            handle_engine_error(app, kind, message);
         }
     }
 }
@@ -297,6 +326,7 @@ fn spawn_startup(app: AppHandle) {
                 tracing::warn!(erro = %err, "não foi possível iniciar o motor");
                 open_settings_window(&app);
                 set_tray_icon(&app, EngineState::Error);
+                handle_engine_error(&app, err.kind(), err.to_string());
             }
         }
     });
@@ -321,6 +351,12 @@ fn main() {
     tracing_subscriber::fmt::init();
 
     tauri::Builder::default()
+        // Precisa ser o primeiro plugin registrado (requisito do próprio
+        // plugin). Segunda abertura: ativa a existente (mostra Settings) e
+        // sai — nunca duas instâncias do motor/mic ao mesmo tempo.
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            open_settings_window(app);
+        }))
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
                 .with_handler(|app, _shortcut, event| {
@@ -334,6 +370,7 @@ fn main() {
             engine: Mutex::new(None),
             mute_item: Mutex::new(None),
             muted: AtomicBool::new(false),
+            pending_error: Mutex::new(None),
         })
         .invoke_handler(tauri::generate_handler![
             set_mute,
@@ -342,7 +379,8 @@ fn main() {
             get_settings,
             list_devices,
             save_settings,
-            set_fx_amount
+            set_fx_amount,
+            take_pending_error
         ])
         .setup(|app| {
             let handle = app.handle().clone();

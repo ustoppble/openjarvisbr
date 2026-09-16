@@ -120,6 +120,19 @@ impl LiveError {
             _ => 4,
         }
     }
+
+    /// Categoria do erro, para a UI decidir o que mostrar.
+    pub fn kind(&self) -> crate::engine::EngineErrorKind {
+        use crate::engine::EngineErrorKind;
+        match self {
+            LiveError::Unauthorized => EngineErrorKind::InvalidKey,
+            LiveError::RateLimited => EngineErrorKind::Quota,
+            LiveError::Connect(_)
+            | LiveError::SetupTimeout
+            | LiveError::Closed(_)
+            | LiveError::GaveUp(_) => EngineErrorKind::Socket,
+        }
+    }
 }
 
 /// Backoff da reconexão: 1s, 2s, 4s e depois desiste.

@@ -1,7 +1,13 @@
 // Janela de configurações (JRV-33): chave, voz, dispositivos, efeito,
 // barge-in e system prompt. A chave nunca é lida de volta do backend em
 // texto — só um contador de caracteres quando já existe uma configurada.
+//
+// JRV-34: também mostra o erro que fez o backend abrir esta janela — chave
+// inválida (401) no campo da chave, ou dispositivo ausente na lista certa.
+// Chega de duas formas: `take_pending_error` no carregamento (janela recém
+// criada) e o evento `engine://settings-error` (janela já aberta).
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 
 const VOICES = ["Puck", "Charon", "Kore", "Fenrir", "Aoede", "Leda", "Orus", "Zephyr"];
 
@@ -20,6 +26,11 @@ interface SettingsPayload {
 interface DevicesPayload {
   input: string[];
   output: string[];
+}
+
+interface SettingsErrorPayload {
+  kind: "invalid_key" | "no_input_device" | "no_output_device";
+  message: string;
 }
 
 const $ = <T extends HTMLElement>(id: string): T => {
@@ -75,6 +86,21 @@ function setStatus(text: string, kind: "" | "ok" | "error" = "") {
   statusEl.className = `status ${kind}`.trim();
 }
 
+function applySettingsError(payload: SettingsErrorPayload) {
+  if (payload.kind === "invalid_key") {
+    apiKeyHint.textContent = payload.message;
+    apiKeyHint.classList.add("error");
+    apiKeyInput.classList.add("error");
+    apiKeyInput.focus();
+    return;
+  }
+  const select = payload.kind === "no_input_device" ? deviceInSelect : deviceOutSelect;
+  select.classList.add("error");
+  select.focus();
+  select.scrollIntoView({ block: "center" });
+  setStatus(payload.message, "error");
+}
+
 async function load() {
   const [settings, devices] = await Promise.all([
     invoke<SettingsPayload>("get_settings"),
@@ -97,7 +123,21 @@ async function load() {
 
   bargeInCheckbox.checked = settings.barge_in;
   systemPromptTextarea.value = settings.system_prompt;
+
+  const pendingError = await invoke<SettingsErrorPayload | null>("take_pending_error");
+  if (pendingError) {
+    applySettingsError(pendingError);
+  }
 }
+
+listen<SettingsErrorPayload>("engine://settings-error", (event) => applySettingsError(event.payload));
+
+apiKeyInput.addEventListener("input", () => {
+  apiKeyHint.classList.remove("error");
+  apiKeyInput.classList.remove("error");
+});
+deviceInSelect.addEventListener("change", () => deviceInSelect.classList.remove("error"));
+deviceOutSelect.addEventListener("change", () => deviceOutSelect.classList.remove("error"));
 
 fxAmountInput.addEventListener("input", () => {
   const amount = Number(fxAmountInput.value);

@@ -63,7 +63,26 @@ pub enum EngineEvent {
     /// A sessão caiu de vez. O motor segue vivo em `Error` esperando
     /// `reconnect()` ou `stop()`; o erro tipado fica em
     /// [`EngineHandle::last_error`].
-    Error(String),
+    Error { kind: EngineErrorKind, message: String },
+}
+
+/// Categoria do erro, para quem consome os eventos (desktop, CLI) decidir a
+/// UI da tabela "Tratamento de erros" da spec sem conhecer os tipos internos
+/// de socket/áudio.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EngineErrorKind {
+    /// Chave inválida ou sem permissão (401).
+    InvalidKey,
+    /// Sem microfone, ou o configurado não existe mais.
+    NoInputDevice,
+    /// Sem saída de áudio, ou a configurada não existe mais.
+    NoOutputDevice,
+    /// Socket caiu e a reconexão automática esgotou as tentativas.
+    Socket,
+    /// Quota da API esgotada ou limite de taxa atingido (429).
+    Quota,
+    /// Qualquer outra falha (runtime, resampler, formato de amostra…).
+    Other,
 }
 
 /// Parâmetros de uma sessão de conversa. `Debug` é manual para nunca
@@ -132,6 +151,16 @@ impl EngineError {
             EngineError::Connect(err) => err.exit_code(),
             EngineError::Capture(_) | EngineError::Playback(_) => 3,
             EngineError::Runtime(_) => 4,
+        }
+    }
+
+    /// Categoria do erro, para a UI decidir o que mostrar.
+    pub fn kind(&self) -> EngineErrorKind {
+        match self {
+            EngineError::Connect(err) => err.kind(),
+            EngineError::Capture(err) => err.kind(),
+            EngineError::Playback(err) => err.kind(),
+            EngineError::Runtime(_) => EngineErrorKind::Other,
         }
     }
 }
@@ -608,12 +637,13 @@ impl Worker {
             }
             Some(ServerEvent::Closed) | None => {
                 let err = self.session.take().and_then(|s| s.error());
+                let kind = err.as_ref().map_or(EngineErrorKind::Socket, LiveError::kind);
                 let message = match &err {
                     Some(err) => err.to_string(),
                     None => "conexão com a Live API encerrada".to_string(),
                 };
                 *self.last_error.lock().unwrap_or_else(|e| e.into_inner()) = err;
-                self.fail(message);
+                self.fail(kind, message);
             }
         }
     }
@@ -682,22 +712,23 @@ impl Worker {
                 true
             }
             Connected::Failed(err) => {
+                let kind = err.kind();
                 let message = err.to_string();
                 *self.last_error.lock().unwrap_or_else(|e| e.into_inner()) = Some(err);
-                self.fail(message);
+                self.fail(kind, message);
                 true
             }
             Connected::Stopped => false,
         }
     }
 
-    fn fail(&mut self, message: String) {
+    fn fail(&mut self, kind: EngineErrorKind, message: String) {
         self.output.flush();
         self.speaking = false;
         self.connecting = false;
         self.failed = true;
         self.update_state();
-        self.emit.send(EngineEvent::Error(message));
+        self.emit.send(EngineEvent::Error { kind, message });
     }
 
     /// Recalcula o estado a partir das flags e emite só se mudou.
@@ -1024,7 +1055,7 @@ mod tests {
         );
         assert!(matches!(
             next_non_level(&mut events).await,
-            EngineEvent::Error(_)
+            EngineEvent::Error { .. }
         ));
 
         handle.reconnect();

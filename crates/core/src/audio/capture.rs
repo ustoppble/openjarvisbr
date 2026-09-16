@@ -77,6 +77,18 @@ impl std::fmt::Display for CaptureError {
 
 impl std::error::Error for CaptureError {}
 
+impl CaptureError {
+    /// Categoria do erro, para a UI decidir o que mostrar.
+    pub fn kind(&self) -> crate::engine::EngineErrorKind {
+        match self {
+            CaptureError::NoInputDevice | CaptureError::DeviceNotFound(_) => {
+                crate::engine::EngineErrorKind::NoInputDevice
+            }
+            _ => crate::engine::EngineErrorKind::Other,
+        }
+    }
+}
+
 /// Lista os nomes dos dispositivos de entrada disponíveis no host padrão.
 /// Usado para o diagnóstico exibido quando não há microfone disponível.
 pub fn list_input_devices() -> Vec<String> {

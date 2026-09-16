@@ -51,6 +51,18 @@ impl fmt::Display for PlaybackError {
 
 impl std::error::Error for PlaybackError {}
 
+impl PlaybackError {
+    /// Categoria do erro, para a UI decidir o que mostrar.
+    pub fn kind(&self) -> crate::engine::EngineErrorKind {
+        match self {
+            PlaybackError::NoOutputDevice | PlaybackError::DeviceNotFound(_) => {
+                crate::engine::EngineErrorKind::NoOutputDevice
+            }
+            _ => crate::engine::EngineErrorKind::Other,
+        }
+    }
+}
+
 impl From<cpal::Error> for PlaybackError {
     fn from(err: cpal::Error) -> Self {
         PlaybackError::Cpal(err)

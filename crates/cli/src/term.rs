@@ -50,7 +50,7 @@ pub async fn run(
                 Ok(EngineEvent::UserText(text)) => transcript.user(&text),
                 Ok(EngineEvent::ModelText(text)) => transcript.model(&text),
                 Ok(EngineEvent::TurnComplete) => transcript.end_line(),
-                Ok(EngineEvent::Error(message)) => {
+                Ok(EngineEvent::Error { message, .. }) => {
                     transcript.end_line();
                     eprint!("sessão encerrada: {message}\r\n");
                     break handle.last_error().map_or(0, |err| err.exit_code());
