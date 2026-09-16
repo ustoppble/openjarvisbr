@@ -5,7 +5,6 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>OpenJarvisBR — Overlay</title>
     <style>
-        /* CSS Reset */
         * {
             margin: 0;
             padding: 0;
@@ -16,71 +15,29 @@
             width: 100%;
             height: 100%;
             overflow: hidden;
+            background: transparent;
         }
 
         body {
-            background: transparent;
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-            font-size: 14px;
-            line-height: 1.5;
+            font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
         }
 
-        /* Design System Variables (from JRV-28 spec) */
+        /* Paleta — docs/design/referencias.md § Recomendação Final */
         :root {
-            /* Primary Palette */
-            --color-primary: #7c3aed;        /* Purple (Perplexity Orb base) */
-            --color-primary-light: #a78bfa;
-            --color-primary-dark: #5b21b6;
+            --color-bg: #0c0c0c;
+            --color-primary: #7c3aed;
+            --color-accent: #06b6d4;
+            --color-coral: #ff6363;
+            --color-text: #e0e0e0;
+            --color-text-dim: #8a8a92;
+            --glow-primary: rgba(124, 58, 237, 0.3);
 
-            /* Accent Palette */
-            --color-accent: #06b6d4;         /* Cyan (Raycast fusion) */
-            --color-accent-light: #22d3ee;
-            --color-accent-dark: #0891b2;
-
-            /* State Colors */
-            --color-listening: #06b6d4;      /* Cyan for active listening */
-            --color-speaking: #7c3aed;       /* Purple for speaking */
-            --color-muted: #6b7280;          /* Gray for muted */
-            --color-error: #ef4444;          /* Red for errors */
-
-            /* Neutral */
-            --color-bg-dark: #0f172a;        /* Dark background */
-            --color-bg-light: #f8fafc;       /* Light background */
-            --color-text: #ffffff;           /* Text on dark */
-            --color-text-dim: #cbd5e1;       /* Dimmed text */
-
-            /* Effects */
-            --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.05);
-            --shadow-md: 0 4px 6px rgba(0, 0, 0, 0.1);
-            --shadow-lg: 0 10px 15px rgba(0, 0, 0, 0.2);
-            --shadow-glow: 0 0 20px rgba(124, 58, 237, 0.4);
-
-            /* Typography */
-            --font-size-xs: 12px;
-            --font-size-sm: 14px;
-            --font-size-base: 16px;
-            --font-size-lg: 18px;
-            --font-size-xl: 20px;
-
-            --font-weight-normal: 400;
-            --font-weight-medium: 500;
-            --font-weight-semibold: 600;
-            --font-weight-bold: 700;
-
-            /* Spacing */
-            --spacing-xs: 4px;
-            --spacing-sm: 8px;
-            --spacing-md: 16px;
-            --spacing-lg: 24px;
-            --spacing-xl: 32px;
-
-            /* Transitions */
-            --transition-fast: 150ms ease-in-out;
-            --transition-normal: 300ms ease-in-out;
-            --transition-slow: 500ms ease-in-out;
+            --appear-duration: 250ms;
+            --appear-ease: ease-out;
+            --disappear-duration: 200ms;
+            --disappear-ease: ease-in;
         }
 
-        /* Overlay Container */
         .overlay-container {
             position: absolute;
             top: 0;
@@ -92,45 +49,181 @@
             justify-content: center;
             visibility: hidden;
             opacity: 0;
-            transition: opacity var(--transition-normal), visibility var(--transition-normal);
+            transform: scale(0.9);
             pointer-events: none;
+            transition:
+                opacity var(--disappear-duration) var(--disappear-ease),
+                transform var(--disappear-duration) var(--disappear-ease),
+                visibility 0s linear var(--disappear-duration);
         }
 
         .overlay-container.visible {
             visibility: visible;
             opacity: 1;
-            pointer-events: auto;
+            transform: scale(1);
+            transition:
+                opacity var(--appear-duration) var(--appear-ease),
+                transform var(--appear-duration) var(--appear-ease),
+                visibility 0s;
         }
 
-        /* State-based styling */
-        .overlay-container.listening {
-            --state-color: var(--color-listening);
-        }
-
-        .overlay-container.speaking {
-            --state-color: var(--color-speaking);
-        }
-
-        .overlay-container.muted {
-            --state-color: var(--color-muted);
-        }
-
-        .overlay-container.error {
-            --state-color: var(--color-error);
-        }
-
-        /* Base for any UI content (to be filled by pane-5644) */
-        .overlay-content {
-            width: 100%;
-            height: 100%;
+        .overlay-card {
             display: flex;
             align-items: center;
+            gap: 16px;
+            width: 100%;
+            height: 100%;
+            padding: 0 22px;
+            background: var(--color-bg);
+            border: 1px solid rgba(124, 58, 237, 0.25);
+            border-radius: 22px;
+            box-shadow: 0 0 24px var(--glow-primary), 0 8px 24px rgba(0, 0, 0, 0.45);
+            transition: border-color 200ms ease-in-out;
+        }
+
+        .overlay-container.muted .overlay-card,
+        .overlay-container.error .overlay-card {
+            border-color: var(--color-coral);
+        }
+
+        /* Orb de 7 pontos — docs/design/prototipos.html (Perplexity Voice Orb) */
+        .orb-wrap {
+            position: relative;
+            width: 56px;
+            height: 56px;
+            flex: 0 0 auto;
+            filter: drop-shadow(0 0 12px var(--glow-primary));
+        }
+
+        .orb {
+            width: 100%;
+            height: 100%;
+        }
+
+        .orb-dots {
+            transform-box: fill-box;
+            transform-origin: center;
+            transform: scale(calc(1 + var(--mic-level, 0) * 0.35));
+            transition: transform 80ms linear;
+        }
+
+        .orb-dot {
+            transform-box: fill-box;
+            transform-origin: center;
+            animation: orb-breathe 1.1s ease-in-out infinite;
+        }
+
+        .orb-dot.primary { fill: var(--color-primary); }
+        .orb-dot.accent { fill: var(--color-accent); }
+
+        .orb-dot:nth-child(1) { animation-delay: 0s; }
+        .orb-dot:nth-child(2) { animation-delay: .15s; }
+        .orb-dot:nth-child(3) { animation-delay: .3s; }
+        .orb-dot:nth-child(4) { animation-delay: .45s; }
+        .orb-dot:nth-child(5) { animation-delay: .6s; }
+        .orb-dot:nth-child(6) { animation-delay: .75s; }
+        .orb-dot:nth-child(7) { animation-delay: .9s; }
+
+        @keyframes orb-breathe {
+            0%, 100% { r: 4; opacity: .55; }
+            50% { r: 5.5; opacity: 1; }
+        }
+
+        .orb-core {
+            fill: var(--color-primary);
+            opacity: .9;
+        }
+
+        .overlay-container.speaking .orb-dots {
+            transform: scale(calc(1.15 + var(--model-level, 0) * 0.35));
+        }
+
+        .overlay-container.speaking .orb-dot {
+            animation-duration: .55s;
+        }
+
+        .overlay-container.muted .orb-wrap {
+            filter: saturate(0.2);
+        }
+
+        .state-dot {
+            position: absolute;
+            top: -2px;
+            right: -2px;
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            background: var(--color-text-dim);
+            box-shadow: 0 0 6px currentColor;
+            transition: background 150ms ease-in-out;
+        }
+
+        .overlay-container.listening .state-dot { background: var(--color-accent); }
+        .overlay-container.speaking .state-dot { background: var(--color-primary); }
+        .overlay-container.muted .state-dot,
+        .overlay-container.error .state-dot { background: var(--color-coral); }
+
+        /* Última fala do usuário e do modelo, uma linha cada, com elipse */
+        .lines {
+            display: flex;
+            flex-direction: column;
             justify-content: center;
+            gap: 6px;
+            min-width: 0;
+            flex: 1 1 auto;
+        }
+
+        .line {
+            font-size: 12px;
+            font-weight: 500;
+            line-height: 1.4;
+            color: var(--color-text);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            opacity: 0;
+            transition: opacity 150ms ease-in-out;
+        }
+
+        .line.has-text {
+            opacity: 1;
+        }
+
+        .line .label {
+            color: var(--color-text-dim);
+            margin-right: 4px;
+        }
+
+        .line-model.tone-error,
+        .line-model.tone-error .label {
+            color: var(--color-coral);
         }
     </style>
 </head>
 <body>
-    <div id="app" class="overlay-container"></div>
+    <div id="app" class="overlay-container">
+        <div class="overlay-card">
+            <div class="orb-wrap">
+                <svg class="orb" viewBox="0 0 100 100" aria-hidden="true">
+                    <g class="orb-dots">
+                        <circle class="orb-dot primary" cx="50" cy="10" r="4"></circle>
+                        <circle class="orb-dot accent" cx="72" cy="20" r="4"></circle>
+                        <circle class="orb-dot primary" cx="78" cy="45" r="4"></circle>
+                        <circle class="orb-dot accent" cx="72" cy="70" r="4"></circle>
+                        <circle class="orb-dot primary" cx="50" cy="80" r="4"></circle>
+                        <circle class="orb-dot accent" cx="28" cy="70" r="4"></circle>
+                        <circle class="orb-dot primary" cx="22" cy="45" r="4"></circle>
+                    </g>
+                    <circle class="orb-core" cx="50" cy="50" r="9"></circle>
+                </svg>
+                <span id="state-dot" class="state-dot"></span>
+            </div>
+            <div class="lines">
+                <div id="user-line" class="line line-user"><span class="label">Você</span><span class="text"></span></div>
+                <div id="model-line" class="line line-model"><span class="label">Jarvis</span><span class="text"></span></div>
+            </div>
+        </div>
+    </div>
     <script type="module" src="/src/overlay/overlay.ts"></script>
 </body>
 </html>

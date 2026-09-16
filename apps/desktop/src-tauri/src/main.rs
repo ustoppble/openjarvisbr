@@ -122,6 +122,35 @@ fn open_settings_window(app: &AppHandle) {
     });
 }
 
+const OVERLAY_WIDTH: f64 = 420.0;
+const OVERLAY_HEIGHT: f64 = 140.0;
+const OVERLAY_TOP_MARGIN: f64 = 12.0;
+
+/// Topo central do monitor ativo (o que está sob o cursor, com fallback pro
+/// primário), em pixels lógicos, respeitando a `work_area` do monitor para
+/// não abrir atrás da menu bar/dock.
+fn overlay_position(app: &AppHandle) -> (f64, f64) {
+    let monitor = app
+        .cursor_position()
+        .ok()
+        .and_then(|cursor| app.monitor_from_point(cursor.x, cursor.y).ok().flatten())
+        .or_else(|| app.primary_monitor().ok().flatten());
+
+    let Some(monitor) = monitor else {
+        return (100.0, OVERLAY_TOP_MARGIN);
+    };
+
+    let scale = monitor.scale_factor();
+    let area = monitor.work_area();
+    let width_px = OVERLAY_WIDTH * scale;
+    let margin_px = OVERLAY_TOP_MARGIN * scale;
+
+    let x = area.position.x as f64 + (area.size.width as f64 - width_px) / 2.0;
+    let y = area.position.y as f64 + margin_px;
+
+    (x / scale, y / scale)
+}
+
 fn open_overlay_window(app: &AppHandle) {
     let handle = app.clone();
     let _ = app.run_on_main_thread(move || {
@@ -129,13 +158,28 @@ fn open_overlay_window(app: &AppHandle) {
             // Overlay já existe, deixa ele gerenciar sua visibilidade via eventos
             return;
         }
-        let _ = WebviewWindowBuilder::new(&handle, "overlay", WebviewUrl::App("overlay/overlay.html".into()))
+        let (x, y) = overlay_position(&handle);
+        // `visible(true)` mantém a janela sempre mapeada: o show/hide real é
+        // puramente CSS (overlay.ts), assim nunca chamamos a API nativa de
+        // show() que tornaria a janela key window. `focusable(false)` é a
+        // garantia definitiva contra roubo de foco (sobrepõe canBecomeKeyWindow
+        // no macOS), independente de qualquer show/hide futuro.
+        let window = WebviewWindowBuilder::new(&handle, "overlay", WebviewUrl::App("overlay/overlay.html".into()))
             .decorations(false)
+            .transparent(true)
             .always_on_top(true)
             .skip_taskbar(true)
-            .inner_size(420.0, 140.0)
-            .position(100.0, 50.0)
+            .resizable(false)
+            .focused(false)
+            .focusable(false)
+            .visible(true)
+            .inner_size(OVERLAY_WIDTH, OVERLAY_HEIGHT)
+            .position(x, y)
             .build();
+
+        if let Ok(window) = window {
+            let _ = window.set_ignore_cursor_events(true);
+        }
     });
 }
 
