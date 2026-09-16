@@ -1,9 +1,12 @@
-//! Ponto de entrada da OpenJarvisBR: parseia flags, carrega config e sobe a App.
+//! Ponto de entrada da OpenJarvisBR: parseia flags, carrega config, sobe o
+//! Engine e mostra no terminal o que ele publica.
+
+mod term;
 
 use clap::Parser;
 
-use openjarvisbr_core::app::{App, AppConfig};
 use openjarvisbr_core::config;
+use openjarvisbr_core::engine::{Engine, EngineConfig};
 
 /// Assistente de voz OpenJarvisBR — conversa contínua com o gemini-3.8-live.
 #[derive(Parser, Debug)]
@@ -112,7 +115,7 @@ fn main() {
 
     // Flag na linha de comando vence o config.toml, que vence o padrão.
     let settings = config::load_settings();
-    let mut app = App::new(AppConfig {
+    let engine_config = EngineConfig {
         api_key,
         voice: cli.voice.or(settings.voice).unwrap_or_else(|| "Puck".to_string()),
         device_in: cli.device_in.or(settings.device_in),
@@ -129,8 +132,19 @@ fn main() {
         system_prompt: settings
             .system_prompt
             .unwrap_or_else(|| config::DEFAULT_SYSTEM_PROMPT.to_string()),
-    });
-    let exit_code = runtime.block_on(app.run());
+    };
+    let barge_in = engine_config.barge_in;
+    let fx_amount = engine_config.fx_amount.clamp(0.0, 1.0);
+    let record_dir = engine_config.record_dir.clone();
+
+    let handle = match runtime.block_on(Engine::start(engine_config)) {
+        Ok(handle) => handle,
+        Err(err) => {
+            term::report_start_error(&err);
+            std::process::exit(err.exit_code());
+        }
+    };
+    let exit_code = runtime.block_on(term::run(handle, barge_in, fx_amount, record_dir));
     std::process::exit(exit_code);
 }
 

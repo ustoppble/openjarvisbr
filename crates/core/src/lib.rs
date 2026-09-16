@@ -1,7 +1,7 @@
-//! openjarvisbr-core: áudio, sessão Live e config, sem terminal.
-//! `app` será substituído pelo Engine (JRV-30); por ora fica público aqui.
+//! openjarvisbr-core: áudio, sessão Live, config e o motor dirigido por
+//! eventos (`engine`), sem terminal.
 
-pub mod app;
 pub mod audio;
 pub mod config;
+pub mod engine;
 pub mod live;

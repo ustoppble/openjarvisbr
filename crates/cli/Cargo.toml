@@ -10,6 +10,8 @@ path = "src/main.rs"
 [dependencies]
 openjarvisbr-core = { path = "../core" }
 clap.workspace = true
+colored.workspace = true
+crossterm.workspace = true
 fs4.workspace = true
 tokio.workspace = true
 tracing.workspace = true

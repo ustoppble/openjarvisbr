@@ -9,8 +9,8 @@
 //! A URL de conexão carrega a chave em `?key=` — ela nunca vai para log nem
 //! para mensagem de erro: só o host é logado.
 //!
-//! `app.rs` (próximo card) é quem usa este módulo; até lá, itens ainda não
-//! referenciados por fora não devem acender `dead_code`.
+//! `engine.rs` é quem usa este módulo; itens ainda não referenciados por
+//! fora não devem acender `dead_code`.
 #![allow(dead_code)]
 
 use std::collections::VecDeque;
@@ -386,6 +386,10 @@ impl Worker {
                 espera_s = delay.as_secs(),
                 "reconectando"
             );
+            let _ = self
+                .event_tx
+                .send(ServerEvent::Reconnecting(backoff.attempts()))
+                .await;
             tokio::time::sleep(delay).await;
             match open(&self.cfg, context.as_deref()).await {
                 Ok((sink, stream)) => {
@@ -394,6 +398,7 @@ impl Worker {
                     // Áudio acumulado durante a queda já está velho.
                     while self.audio_rx.try_recv().is_ok() {}
                     info!(host = HOST, "reconectado");
+                    let _ = self.event_tx.send(ServerEvent::Reconnected).await;
                     return Ok(());
                 }
                 Err(err @ (LiveError::Unauthorized | LiveError::RateLimited)) => return Err(err),

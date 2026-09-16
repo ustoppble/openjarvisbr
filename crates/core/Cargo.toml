@@ -5,9 +5,7 @@ edition = "2021"
 
 [dependencies]
 base64.workspace = true
-colored.workspace = true
 cpal.workspace = true
-crossterm.workspace = true
 futures-util.workspace = true
 hound.workspace = true
 ringbuf.workspace = true

@@ -276,6 +276,11 @@ pub enum ServerEvent {
     /// fechar a linha da transcrição corrente.
     TurnComplete,
     GoAway,
+    /// Produzido por `session.rs` antes de cada tentativa de reconexão
+    /// automática (1, 2, 3) — nunca vem de `parse`.
+    Reconnecting(u32),
+    /// Produzido por `session.rs` quando a reconexão automática deu certo.
+    Reconnected,
     /// Produzido por `session.rs` quando o socket fecha — nunca vem de
     /// `parse`, que só lê mensagens JSON efetivamente recebidas.
     Closed,
