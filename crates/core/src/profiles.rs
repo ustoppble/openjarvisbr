@@ -33,6 +33,14 @@ pub struct Profile {
     pub voice: String,
     #[serde(default = "default_fx_amount")]
     pub fx_amount: f32,
+    /// Allow-list de ferramentas (globs: `fs.*`, `mcp.overclock.*`, `*`).
+    /// Ausente num perfil próprio = nenhuma ferramenta.
+    #[serde(default)]
+    pub tools: Vec<String>,
+}
+
+fn globs(list: &[&str]) -> Vec<String> {
+    list.iter().map(|g| g.to_string()).collect()
 }
 
 /// Os cinco perfis embutidos, com o prompt já resolvido para `user_name`
@@ -48,6 +56,7 @@ pub fn builtin_profiles(user_name: Option<&str>) -> Vec<Profile> {
             system_prompt: base.clone(),
             voice: "Puck".to_string(),
             fx_amount: 0.35,
+            tools: globs(&["*"]),
         },
         Profile {
             id: "english_teacher".to_string(),
@@ -66,6 +75,7 @@ frases de uma vez — isto é voz, uma frase de cada vez."
             ),
             voice: "Aoede".to_string(),
             fx_amount: 0.0,
+            tools: Vec::new(),
         },
         Profile {
             id: "therapist".to_string(),
@@ -88,6 +98,7 @@ confiança ou um serviço de saúde por perto."
             ),
             voice: "Kore".to_string(),
             fx_amount: 0.0,
+            tools: Vec::new(),
         },
         Profile {
             id: "business_mentor".to_string(),
@@ -104,6 +115,7 @@ combinado do que fazer a seguir."
             ),
             voice: "Charon".to_string(),
             fx_amount: 0.35,
+            tools: globs(&["calendar.*", "reminder.*", "mcp.overclick.*"]),
         },
         Profile {
             id: "pair_programmer".to_string(),
@@ -121,6 +133,7 @@ sem ditar bloco de código inteiro em voz."
             ),
             voice: "Fenrir".to_string(),
             fx_amount: 0.35,
+            tools: globs(&["fs.*", "shell.*", "mcp.*"]),
         },
     ]
 }
@@ -216,6 +229,7 @@ mod tests {
             system_prompt: "prompt customizado".to_string(),
             voice: "Kore".to_string(),
             fx_amount: 0.1,
+            tools: Vec::new(),
         }];
         let profile = resolve_profile("assistant", None, &custom);
         assert_eq!(profile.name, "Meu assistente");
@@ -238,6 +252,7 @@ mod tests {
                 system_prompt: "x".to_string(),
                 voice: default_voice(),
                 fx_amount: default_fx_amount(),
+                tools: Vec::new(),
             },
             Profile {
                 id: "meu_perfil".to_string(),
@@ -246,6 +261,7 @@ mod tests {
                 system_prompt: "y".to_string(),
                 voice: default_voice(),
                 fx_amount: default_fx_amount(),
+                tools: Vec::new(),
             },
         ];
         let all = all_profiles(None, &custom);
@@ -263,5 +279,24 @@ mod tests {
         assert_eq!(profile.voice, "Puck");
         assert_eq!(profile.fx_amount, 0.35);
         assert_eq!(profile.description, "");
+        assert!(profile.tools.is_empty());
+    }
+
+    #[test]
+    fn builtin_tool_allow_lists_follow_spec() {
+        let tools = |id: &str| resolve_profile(id, None, &[]).tools;
+        assert_eq!(tools("assistant"), ["*"]);
+        assert_eq!(tools("pair_programmer"), ["fs.*", "shell.*", "mcp.*"]);
+        assert_eq!(
+            tools("business_mentor"),
+            ["calendar.*", "reminder.*", "mcp.overclick.*"]
+        );
+        assert!(tools("english_teacher").is_empty());
+        assert!(tools("therapist").is_empty());
+        let custom: Profile = toml::from_str(
+            "id = \"x\"\nname = \"X\"\nsystem_prompt = \"y\"\ntools = [\"fs.*\"]\n",
+        )
+        .unwrap();
+        assert_eq!(custom.tools, ["fs.*"]);
     }
 }

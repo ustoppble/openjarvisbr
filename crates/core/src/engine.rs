@@ -7,6 +7,7 @@
 //! streams do `cpal` não são `Send` em todas as plataformas, e assim o
 //! [`EngineHandle`] pode ser usado de qualquer runtime.
 
+use std::collections::HashMap;
 use std::io::{self, Write};
 use std::path::PathBuf;
 use std::sync::mpsc as std_mpsc;
@@ -20,8 +21,11 @@ use tracing::{info, warn};
 use crate::audio::capture::{self, CaptureError, CaptureHandle};
 use crate::audio::fx::VoiceFx;
 use crate::audio::playback::{PlaybackError, Player};
+use crate::engine_tools::{self, VoiceAnswer};
 use crate::live::protocol::ServerEvent;
 use crate::live::session::{LiveConfig, LiveError, LiveSession};
+use crate::mcp::McpServerConfig;
+use crate::tools::{Policy, Registry, Risk, ToolCall, ToolError, ToolResult, ToolSpec};
 
 /// Capacidade do canal entre a thread de captura e o loop async.
 const CHANNEL_CAPACITY: usize = 64;
@@ -60,6 +64,23 @@ pub enum EngineEvent {
     Level { mic: f32, model: f32 },
     /// Reconexão em andamento (queda, goAway ou `reconnect()`).
     Reconnecting { attempt: u32 },
+    /// O modelo pediu uma ferramenta (já com o risco efetivo da política).
+    ToolRequested { call: ToolCall, risk: Risk },
+    /// Chamada `Confirm` segurada: aprovar com
+    /// [`EngineHandle::confirm_tool`] ou por voz ("sim"/"não").
+    ToolConfirmNeeded {
+        id: String,
+        name: String,
+        summary: String,
+    },
+    /// Fim de uma chamada: executada (`ok`), com erro, negada, sem
+    /// confirmação a tempo ou cancelada pelo servidor.
+    ToolResult {
+        id: String,
+        name: String,
+        ok: bool,
+        summary: String,
+    },
     /// A sessão caiu de vez. O motor segue vivo em `Error` esperando
     /// `reconnect()` ou `stop()`; o erro tipado fica em
     /// [`EngineHandle::last_error`].
@@ -106,6 +127,11 @@ pub struct EngineConfig {
     /// apresente no seu novo papel" ao trocar de perfil). `None` no início
     /// normal do app.
     pub greeting: Option<String>,
+    /// Allow-list de ferramentas do perfil (globs: `fs.*`, `mcp.overclock.*`,
+    /// `*`). Vazia = sem ferramentas (e sem seção de ferramentas no prompt).
+    pub tools: Vec<String>,
+    /// Servidores MCP cujas tools entram no registro (se algum glob alcança).
+    pub mcp_servers: Vec<McpServerConfig>,
 }
 
 impl std::fmt::Debug for EngineConfig {
@@ -119,14 +145,21 @@ impl std::fmt::Debug for EngineConfig {
             .field("record_dir", &self.record_dir)
             .field("fx_amount", &self.fx_amount)
             .field("greeting", &self.greeting)
+            .field("tools", &self.tools)
+            .field(
+                "mcp_servers",
+                &self.mcp_servers.iter().map(|s| &s.name).collect::<Vec<_>>(),
+            )
             .finish()
     }
 }
 
 impl EngineConfig {
-    fn live_config(&self) -> LiveConfig {
+    fn live_config(&self, tools: &[ToolSpec]) -> LiveConfig {
+        let prompt = engine_tools::system_prompt_with_tools(&self.system_prompt, !tools.is_empty());
         let mut cfg = LiveConfig::new(self.api_key.clone(), self.voice.clone())
-            .with_system_prompt(self.system_prompt.clone());
+            .with_system_prompt(prompt)
+            .with_tools(tools.to_vec());
         if let Some(dir) = &self.record_dir {
             let _ = std::fs::create_dir_all(dir);
             cfg = cfg.with_raw_log(dir.join("raw.jsonl"));
@@ -177,6 +210,7 @@ enum Command {
     Mute(bool),
     Reconnect,
     SetFxAmount(f32),
+    ConfirmTool { id: String, approve: bool },
     Stop,
 }
 
@@ -205,6 +239,15 @@ impl EngineHandle {
     /// Ajusta o efeito de voz ao vivo (0..1).
     pub fn set_fx_amount(&self, amount: f32) {
         let _ = self.commands.send(Command::SetFxAmount(amount));
+    }
+
+    /// Responde a um [`EngineEvent::ToolConfirmNeeded`]. Id desconhecido (já
+    /// resolvido por voz, expirado ou cancelado) é ignorado.
+    pub fn confirm_tool(&self, id: &str, approve: bool) {
+        let _ = self.commands.send(Command::ConfirmTool {
+            id: id.to_string(),
+            approve,
+        });
     }
 
     /// Encerra o motor e espera microfone, gravação e sessão fecharem.
@@ -247,6 +290,10 @@ enum Backend {
     Real,
     #[cfg(test)]
     Fake(fake::FakeBackend),
+    /// Live API e ferramentas de verdade, mas o "microfone" é um canal
+    /// (fala sintetizada) e a saída é muda — validação ponta a ponta.
+    #[cfg(test)]
+    LiveMic(Option<mpsc::Receiver<Vec<i16>>>),
 }
 
 async fn start_with(config: EngineConfig, backend: Backend) -> Result<EngineHandle, EngineError> {
@@ -323,6 +370,16 @@ impl Session {
             Session::Live(session) => session.send_audio(samples),
             #[cfg(test)]
             Session::Fake(_) => {}
+        }
+    }
+
+    fn send_tool_response(&self, results: &[ToolResult]) {
+        match self {
+            Session::Live(session) => session.send_tool_response(results),
+            #[cfg(test)]
+            Session::Fake(session) => {
+                let _ = session.responses.send(results.to_vec());
+            }
         }
     }
 
@@ -417,6 +474,38 @@ impl Meter {
     }
 }
 
+/// Chamada `Confirm` esperando resposta.
+struct PendingConfirm {
+    call: ToolCall,
+    asked: Instant,
+    /// Fala do usuário acumulada desde o pedido (a transcrição chega picada).
+    heard: String,
+}
+
+/// Prazos da confirmação; os testes encurtam.
+#[derive(Debug, Clone, Copy)]
+struct ToolTimeouts {
+    voice_window: Duration,
+    confirm: Duration,
+    exec: Duration,
+}
+
+impl Default for ToolTimeouts {
+    fn default() -> Self {
+        ToolTimeouts {
+            voice_window: engine_tools::VOICE_CONFIRM_WINDOW,
+            confirm: engine_tools::CONFIRM_TIMEOUT,
+            exec: engine_tools::EXEC_TIMEOUT,
+        }
+    }
+}
+
+/// Resultado de uma execução, devolvido pela task ao loop.
+struct Finished {
+    name: String,
+    result: ToolResult,
+}
+
 /// Resultado de esperar uma conexão enquanto comandos chegam.
 enum Connected {
     Ok(Session),
@@ -446,6 +535,27 @@ struct Worker {
     mic_meter: Meter,
     model_meter: Meter,
     model_level: f32,
+    /// Ferramentas liberadas pelo perfil.
+    registry: Registry,
+    tool_specs: Vec<ToolSpec>,
+    policy: Policy,
+    timeouts: ToolTimeouts,
+    confirms: Vec<PendingConfirm>,
+    /// Ações `Confirm` aprovadas há pouco (nome, argumentos, quando): o modelo
+    /// às vezes chama de novo ao ouvir o "sim".
+    approved: Vec<(String, serde_json::Value, Instant)>,
+    /// Fala do modelo no turno corrente (para ver se terminou em "confirma?").
+    model_turn: String,
+    /// Quando o modelo perguntou "confirma?" sem chamada pendente, e o que o
+    /// usuário disse desde então.
+    question: Option<(Instant, String)>,
+    /// "Sim" dito à pergunta do modelo antes de a chamada chegar: aprova a
+    /// próxima chamada `Confirm` dentro da janela de voz.
+    early_approval: Option<Instant>,
+    /// Execuções em andamento, por id (para cancelar).
+    running: HashMap<String, (String, tokio::task::AbortHandle)>,
+    finished_tx: mpsc::UnboundedSender<Finished>,
+    finished_rx: mpsc::UnboundedReceiver<Finished>,
 }
 
 impl Worker {
@@ -459,8 +569,22 @@ impl Worker {
         last_error: Arc<Mutex<Option<LiveError>>>,
     ) -> Result<Worker, EngineError> {
         emit.send(EngineEvent::State(EngineState::Connecting));
-        info!("conectando à Live API");
-        let session = connect(&config, &mut backend)
+        let (registry, timeouts) = match &backend {
+            Backend::Real => (
+                engine_tools::build_registry(&config.tools, &config.mcp_servers).await,
+                ToolTimeouts::default(),
+            ),
+            #[cfg(test)]
+            Backend::Fake(fake) => (fake.registry.filter_for_profile(&config.tools), fake.timeouts),
+            #[cfg(test)]
+            Backend::LiveMic(_) => (
+                engine_tools::build_registry(&config.tools, &config.mcp_servers).await,
+                ToolTimeouts::default(),
+            ),
+        };
+        let tool_specs = registry.specs();
+        info!(ferramentas = tool_specs.len(), "conectando à Live API");
+        let session = connect(&config, &tool_specs, &mut backend)
             .await
             .map_err(EngineError::Connect)?;
         // O `greeting` (ex.: "se apresente no novo papel") é só para a
@@ -483,6 +607,8 @@ impl Worker {
             }
             #[cfg(test)]
             Backend::Fake(fake) => (fake.take_mic(), None, Output::Null),
+            #[cfg(test)]
+            Backend::LiveMic(mic) => (mic.take().expect("mic já usado"), None, Output::Null),
         };
 
         let recorder = config.record_dir.as_ref().and_then(|dir| match Recorder::open(dir) {
@@ -493,7 +619,20 @@ impl Worker {
             }
         });
 
+        let (finished_tx, finished_rx) = mpsc::unbounded_channel();
         Ok(Worker {
+            registry,
+            tool_specs,
+            policy: Policy::new(),
+            timeouts,
+            confirms: Vec::new(),
+            approved: Vec::new(),
+            model_turn: String::new(),
+            question: None,
+            early_approval: None,
+            running: HashMap::new(),
+            finished_tx,
+            finished_rx,
             voice_fx: VoiceFx::new(config.fx_amount),
             config,
             backend,
@@ -532,11 +671,13 @@ impl Worker {
                     }
                 },
                 event = next_event(&mut self.session) => self.on_server_event(event),
+                Some(done) = self.finished_rx.recv() => self.on_tool_finished(done),
                 command = self.commands.recv() => match command {
                     Some(Command::Mute(muted)) => {
                         self.muted = muted;
                         self.update_state();
                     }
+                    Some(Command::ConfirmTool { id, approve }) => self.resolve_confirm(&id, approve, "botão"),
                     Some(Command::SetFxAmount(amount)) => self.voice_fx = VoiceFx::new(amount),
                     Some(Command::Reconnect) => {
                         if !self.reconnect().await {
@@ -552,6 +693,7 @@ impl Worker {
             }
         }
 
+        self.reset_tools();
         if let Some(recorder) = self.recorder.take() {
             recorder.finish();
         }
@@ -610,6 +752,7 @@ impl Worker {
                 self.output.flush();
                 self.last_model_audio = None;
                 self.speaking = false;
+                self.end_model_turn();
                 self.emit.send(EngineEvent::TurnComplete);
                 self.update_state();
             }
@@ -617,12 +760,14 @@ impl Worker {
                 if let Some(r) = self.recorder.as_mut() {
                     r.event("user_text", &text);
                 }
+                self.hear_confirmation(&text);
                 self.emit.send(EngineEvent::UserText(text));
             }
             Some(ServerEvent::ModelText(text)) => {
                 if let Some(r) = self.recorder.as_mut() {
                     r.event("model_text", &text);
                 }
+                self.model_turn.push_str(&text);
                 self.emit.send(EngineEvent::ModelText(text));
             }
             Some(ServerEvent::TurnComplete) => {
@@ -630,6 +775,7 @@ impl Worker {
                     r.event("turn_complete", "");
                 }
                 self.output.end_of_turn();
+                self.end_model_turn();
                 self.emit.send(EngineEvent::TurnComplete);
             }
             Some(ServerEvent::GoAway) => {
@@ -638,8 +784,12 @@ impl Worker {
                 }
                 info!("servidor pediu encerramento (goAway); reconectando");
             }
-            // Execução de ferramentas chega com o card E (JRV-53 só traz o protocolo).
-            Some(ServerEvent::ToolCall(_)) | Some(ServerEvent::ToolCallCancellation(_)) => {}
+            Some(ServerEvent::ToolCall(calls)) => {
+                for call in calls {
+                    self.on_tool_call(call);
+                }
+            }
+            Some(ServerEvent::ToolCallCancellation(ids)) => self.cancel_tools(&ids),
             Some(ServerEvent::Reconnecting(attempt)) => {
                 self.connecting = true;
                 self.update_state();
@@ -650,6 +800,7 @@ impl Worker {
                 self.update_state();
             }
             Some(ServerEvent::Closed) | None => {
+                self.reset_tools();
                 let err = self.session.take().and_then(|s| s.error());
                 let kind = err.as_ref().map_or(EngineErrorKind::Socket, LiveError::kind);
                 let message = match &err {
@@ -662,7 +813,266 @@ impl Worker {
         }
     }
 
+    /// Aplica a política: `Safe` executa já; `Confirm` segura e pergunta.
+    fn on_tool_call(&mut self, call: ToolCall) {
+        let summary = engine_tools::call_summary(&call);
+        let Some(spec) = self.registry.get(&call.name).map(|tool| tool.spec()) else {
+            // Fora da allow-list do perfil (ou inexistente): recusa na hora.
+            warn!(ferramenta = %call.name, "ferramenta não liberada neste perfil");
+            self.emit.send(EngineEvent::ToolRequested {
+                call: call.clone(),
+                risk: Risk::Confirm,
+            });
+            let error = ToolError::NotAllowed(call.name.clone()).to_string();
+            self.respond(&call.name, ToolResult::err(&call.id, error));
+            return;
+        };
+        let risk = self.policy.risk(&spec);
+        if let Some(r) = self.recorder.as_mut() {
+            r.event("tool_call", format!("{} [{risk:?}] {summary}", call.id));
+        }
+        self.emit.send(EngineEvent::ToolRequested {
+            call: call.clone(),
+            risk,
+        });
+        match risk {
+            Risk::Safe => self.execute(call),
+            Risk::Confirm if self.recently_approved(&call) => {
+                info!(ferramenta = %call.name, "repetição de ação já aprovada, não executa de novo");
+                if let Some(r) = self.recorder.as_mut() {
+                    r.event("tool_repeat", &call.id);
+                }
+                let output = serde_json::json!({
+                    "status": "já executada",
+                    "nota": "esta mesma ação acabou de ser confirmada e executada; \
+                             use o resultado da chamada anterior e não chame de novo",
+                });
+                self.respond(&call.name, ToolResult::ok(&call.id, output));
+            }
+            Risk::Confirm => {
+                info!(ferramenta = %call.name, "aguardando confirmação");
+                let id = call.id.clone();
+                self.emit.send(EngineEvent::ToolConfirmNeeded {
+                    id: id.clone(),
+                    name: call.name.clone(),
+                    summary,
+                });
+                self.confirms.push(PendingConfirm {
+                    call,
+                    asked: Instant::now(),
+                    heard: String::new(),
+                });
+                let window = self.timeouts.voice_window;
+                if self
+                    .early_approval
+                    .take()
+                    .is_some_and(|at| at.elapsed() < window)
+                {
+                    self.resolve_confirm(&id, true, "voz, antes da chamada");
+                }
+            }
+        }
+    }
+
+    /// Fim de um turno do modelo: se ele terminou perguntando "confirma?"
+    /// sem chamada pendente, a próxima resposta do usuário fica valendo.
+    fn end_model_turn(&mut self) {
+        let turn = std::mem::take(&mut self.model_turn);
+        if self.confirms.is_empty() && engine_tools::asks_confirmation(&turn) {
+            self.question = Some((Instant::now(), String::new()));
+        }
+    }
+
+    /// Fala do usuário enquanto há confirmação pendente: "sim" aprova, "não"
+    /// nega — vale para todas as pendentes dentro da janela de voz.
+    fn hear_confirmation(&mut self, text: &str) {
+        if self.confirms.is_empty() {
+            let window = self.timeouts.voice_window;
+            if let Some((at, heard)) = self.question.as_mut() {
+                if at.elapsed() > window {
+                    self.question = None;
+                } else {
+                    heard.push_str(text);
+                    match engine_tools::voice_answer(heard) {
+                        Some(VoiceAnswer::Approve) => {
+                            self.early_approval = Some(Instant::now());
+                            self.question = None;
+                        }
+                        Some(VoiceAnswer::Deny) => {
+                            self.early_approval = None;
+                            self.question = None;
+                        }
+                        None => {}
+                    }
+                }
+            }
+            return;
+        }
+        let window = self.timeouts.voice_window;
+        let mut decided = Vec::new();
+        for pending in &mut self.confirms {
+            if pending.asked.elapsed() > window {
+                continue;
+            }
+            // Os fragmentos já trazem os próprios espaços.
+            pending.heard.push_str(text);
+            if let Some(answer) = engine_tools::voice_answer(&pending.heard) {
+                decided.push((pending.call.id.clone(), answer == VoiceAnswer::Approve));
+            }
+        }
+        for (id, approve) in decided {
+            self.resolve_confirm(&id, approve, "voz");
+        }
+    }
+
+    fn resolve_confirm(&mut self, id: &str, approve: bool, via: &str) {
+        let Some(at) = self.confirms.iter().position(|p| p.call.id == id) else {
+            return;
+        };
+        let pending = self.confirms.remove(at);
+        if let Some(r) = self.recorder.as_mut() {
+            let verdict = if approve { "aprovada" } else { "negada" };
+            r.event("tool_confirm", format!("{id} {verdict} por {via}"));
+        }
+        info!(ferramenta = %pending.call.name, aprovada = approve, via, "confirmação");
+        if approve {
+            self.approved
+                .retain(|(_, _, at)| at.elapsed() < engine_tools::REPEAT_WINDOW);
+            self.approved.push((
+                pending.call.name.clone(),
+                pending.call.args.clone(),
+                Instant::now(),
+            ));
+            self.execute(pending.call);
+        } else {
+            let error = format!(
+                "{}: o usuário não autorizou, nada foi executado",
+                ToolError::Denied
+            );
+            self.respond(&pending.call.name, ToolResult::err(&pending.call.id, error));
+        }
+    }
+
+    fn recently_approved(&self, call: &ToolCall) -> bool {
+        self.approved.iter().any(|(name, args, at)| {
+            name == &call.name && args == &call.args && at.elapsed() < engine_tools::REPEAT_WINDOW
+        })
+    }
+
+    /// Confirmações sem resposta no prazo viram negação.
+    fn expire_confirms(&mut self) {
+        let limit = self.timeouts.confirm;
+        let expired: Vec<ToolCall> = {
+            let (old, keep): (Vec<_>, Vec<_>) = std::mem::take(&mut self.confirms)
+                .into_iter()
+                .partition(|p| p.asked.elapsed() >= limit);
+            self.confirms = keep;
+            old.into_iter().map(|p| p.call).collect()
+        };
+        for call in expired {
+            if let Some(r) = self.recorder.as_mut() {
+                r.event("tool_confirm", format!("{} expirada", call.id));
+            }
+            let error = format!(
+                "sem confirmação em {}s: nada foi executado",
+                limit.as_secs().max(1)
+            );
+            self.respond(&call.name, ToolResult::err(&call.id, error));
+        }
+    }
+
+    /// Executa numa task própria, com timeout; o resultado volta pelo canal.
+    fn execute(&mut self, call: ToolCall) {
+        let registry = self.registry.clone();
+        let limit = self.timeouts.exec;
+        let done = self.finished_tx.clone();
+        let id = call.id.clone();
+        let name = call.name.clone();
+        let task = tokio::spawn(async move {
+            let result = match tokio::time::timeout(limit, registry.call(&call)).await {
+                Ok(result) => result,
+                Err(_) => ToolResult::err(
+                    &call.id,
+                    format!("{} ({}s): a ação não terminou", ToolError::Timeout, limit.as_secs()),
+                ),
+            };
+            let _ = done.send(Finished {
+                name: call.name,
+                result,
+            });
+        });
+        self.running.insert(id, (name, task.abort_handle()));
+    }
+
+    fn on_tool_finished(&mut self, done: Finished) {
+        // Cancelada no meio do caminho: o servidor não quer mais a resposta.
+        if self.running.remove(&done.result.id).is_none() {
+            return;
+        }
+        self.respond(&done.name, done.result);
+    }
+
+    /// Devolve o resultado ao modelo e publica o evento.
+    fn respond(&mut self, name: &str, result: ToolResult) {
+        let ok = result.error.is_none();
+        let summary = engine_tools::result_summary(&result.output, result.error.as_deref());
+        if let Some(r) = self.recorder.as_mut() {
+            r.event("tool_result", format!("{} ok={ok} {summary}", result.id));
+        }
+        if let Some(session) = self.session.as_ref() {
+            session.send_tool_response(std::slice::from_ref(&result));
+        }
+        self.emit.send(EngineEvent::ToolResult {
+            id: result.id,
+            name: name.to_string(),
+            ok,
+            summary,
+        });
+    }
+
+    /// `toolCallCancellation`: descarta pendentes e aborta execuções, sem
+    /// responder ao modelo.
+    fn cancel_tools(&mut self, ids: &[String]) {
+        for id in ids {
+            let name = if let Some(at) = self.confirms.iter().position(|p| &p.call.id == id) {
+                Some(self.confirms.remove(at).call.name)
+            } else {
+                self.running.remove(id).map(|(name, task)| {
+                    task.abort();
+                    name
+                })
+            };
+            let Some(name) = name else { continue };
+            if let Some(r) = self.recorder.as_mut() {
+                r.event("tool_cancel", id);
+            }
+            self.emit.send(EngineEvent::ToolResult {
+                id: id.clone(),
+                name,
+                ok: false,
+                summary: "cancelada".to_string(),
+            });
+        }
+    }
+
+    /// Sessão perdida ou motor parando: nada pendente sobrevive.
+    fn reset_tools(&mut self) {
+        self.question = None;
+        self.early_approval = None;
+        self.model_turn.clear();
+        let ids: Vec<String> = self
+            .confirms
+            .iter()
+            .map(|p| p.call.id.clone())
+            .chain(self.running.keys().cloned())
+            .collect();
+        self.cancel_tools(&ids);
+    }
+
     fn on_tick(&mut self) {
+        if !self.confirms.is_empty() {
+            self.expire_confirms();
+        }
         // O áudio do modelo chega mais rápido que o tempo real; sem pacote
         // novo na janela, mantém o nível enquanto ainda há fila tocando.
         self.model_level = match self.model_meter.take() {
@@ -690,6 +1100,7 @@ impl Worker {
     /// Reconexão pedida pelo handle. Retorna `false` se chegou `stop()`
     /// durante a espera.
     async fn reconnect(&mut self) -> bool {
+        self.reset_tools();
         self.session = None;
         self.output.flush();
         self.speaking = false;
@@ -699,7 +1110,7 @@ impl Worker {
         self.emit.send(EngineEvent::Reconnecting { attempt: 1 });
 
         let connected = {
-            let connecting = connect(&self.config, &mut self.backend);
+            let connecting = connect(&self.config, &self.tool_specs, &mut self.backend);
             tokio::pin!(connecting);
             loop {
                 tokio::select! {
@@ -710,7 +1121,7 @@ impl Worker {
                     command = self.commands.recv() => match command {
                         Some(Command::Mute(muted)) => self.muted = muted,
                         Some(Command::SetFxAmount(amount)) => self.voice_fx = VoiceFx::new(amount),
-                        Some(Command::Reconnect) => {}
+                        Some(Command::Reconnect) | Some(Command::ConfirmTool { .. }) => {}
                         Some(Command::Stop) | None => break Connected::Stopped,
                     },
                 }
@@ -781,13 +1192,21 @@ async fn next_event(session: &mut Option<Session>) -> Option<ServerEvent> {
     }
 }
 
-async fn connect(config: &EngineConfig, backend: &mut Backend) -> Result<Session, LiveError> {
+async fn connect(
+    config: &EngineConfig,
+    tools: &[ToolSpec],
+    backend: &mut Backend,
+) -> Result<Session, LiveError> {
     match backend {
-        Backend::Real => LiveSession::connect(config.live_config())
+        Backend::Real => LiveSession::connect(config.live_config(tools))
             .await
             .map(Session::Live),
         #[cfg(test)]
         Backend::Fake(fake) => Ok(Session::Fake(fake.connect())),
+        #[cfg(test)]
+        Backend::LiveMic(_) => LiveSession::connect(config.live_config(tools))
+            .await
+            .map(Session::Live),
     }
 }
 
@@ -869,11 +1288,15 @@ impl Recorder {
 mod fake {
     use tokio::sync::mpsc;
 
+    use super::ToolTimeouts;
     use crate::live::protocol::ServerEvent;
+    use crate::tools::{Registry, ToolResult};
 
-    /// Sessão roteirizada: entrega o que o teste mandar no canal.
+    /// Sessão roteirizada: entrega o que o teste mandar no canal e repassa
+    /// as respostas de ferramenta que o motor devolveria ao modelo.
     pub struct FakeSession {
         pub events: mpsc::Receiver<ServerEvent>,
+        pub responses: mpsc::UnboundedSender<Vec<ToolResult>>,
     }
 
     /// Primeira conexão usa o roteiro do teste; as seguintes ficam mudas.
@@ -881,6 +1304,9 @@ mod fake {
         script: Option<mpsc::Receiver<ServerEvent>>,
         mic: Option<mpsc::Receiver<Vec<i16>>>,
         silent: Vec<mpsc::Sender<ServerEvent>>,
+        pub registry: Registry,
+        pub timeouts: ToolTimeouts,
+        responses: mpsc::UnboundedSender<Vec<ToolResult>>,
     }
 
     impl FakeBackend {
@@ -889,7 +1315,22 @@ mod fake {
                 script: Some(script),
                 mic: Some(mic),
                 silent: Vec::new(),
+                registry: Registry::new(),
+                timeouts: ToolTimeouts::default(),
+                responses: mpsc::unbounded_channel().0,
             }
+        }
+
+        pub fn with_tools(
+            mut self,
+            registry: Registry,
+            timeouts: ToolTimeouts,
+            responses: mpsc::UnboundedSender<Vec<ToolResult>>,
+        ) -> Self {
+            self.registry = registry;
+            self.timeouts = timeouts;
+            self.responses = responses;
+            self
         }
 
         pub fn connect(&mut self) -> FakeSession {
@@ -898,7 +1339,10 @@ mod fake {
                 self.silent.push(tx);
                 rx
             });
-            FakeSession { events }
+            FakeSession {
+                events,
+                responses: self.responses.clone(),
+            }
         }
 
         pub fn take_mic(&mut self) -> mpsc::Receiver<Vec<i16>> {
@@ -922,6 +1366,8 @@ mod tests {
             system_prompt: String::new(),
             fx_amount: 0.35,
             greeting: None,
+            tools: Vec::new(),
+            mcp_servers: Vec::new(),
         }
     }
 
@@ -1089,5 +1535,454 @@ mod tests {
         assert!(handle.last_error().is_none());
 
         handle.stop().await;
+    }
+
+    mod tool_flow {
+        use super::*;
+        use async_trait::async_trait;
+        use serde_json::{json, Value};
+
+        use crate::tools::Tool;
+
+        /// Ferramenta de teste: devolve os argumentos.
+        struct Echo {
+            name: &'static str,
+            risk: Risk,
+        }
+
+        #[async_trait]
+        impl Tool for Echo {
+            fn spec(&self) -> ToolSpec {
+                ToolSpec {
+                    name: self.name.to_string(),
+                    description: "eco".to_string(),
+                    parameters: json!({"type": "object"}),
+                    risk: self.risk,
+                }
+            }
+
+            async fn call(&self, args: Value) -> Result<Value, ToolError> {
+                Ok(args)
+            }
+        }
+
+        struct Harness {
+            handle: EngineHandle,
+            events: broadcast::Receiver<EngineEvent>,
+            script: mpsc::Sender<ServerEvent>,
+            responses: mpsc::UnboundedReceiver<Vec<ToolResult>>,
+            _mic: mpsc::Sender<Vec<i16>>,
+        }
+
+        async fn start_tools(globs: &[&str], confirm: Duration) -> Harness {
+            let mut registry = Registry::new();
+            registry.register(Box::new(Echo {
+                name: "app.open",
+                risk: Risk::Safe,
+            }));
+            registry.register(Box::new(Echo {
+                name: "shell.run",
+                risk: Risk::Confirm,
+            }));
+            let timeouts = ToolTimeouts {
+                voice_window: Duration::from_secs(5),
+                confirm,
+                exec: Duration::from_secs(5),
+            };
+            let (script_tx, script_rx) = mpsc::channel(16);
+            let (mic_tx, mic_rx) = mpsc::channel(16);
+            let (resp_tx, responses) = mpsc::unbounded_channel();
+            let backend = Backend::Fake(
+                fake::FakeBackend::new(script_rx, mic_rx).with_tools(registry, timeouts, resp_tx),
+            );
+            let mut config = test_config();
+            config.tools = globs.iter().map(|g| g.to_string()).collect();
+            let handle = start_with(config, backend).await.expect("motor fake sobe");
+            let events = handle.events();
+            Harness {
+                handle,
+                events,
+                script: script_tx,
+                responses,
+                _mic: mic_tx,
+            }
+        }
+
+        fn call(id: &str, name: &str, args: Value) -> ServerEvent {
+            ServerEvent::ToolCall(vec![ToolCall {
+                id: id.to_string(),
+                name: name.to_string(),
+                args,
+            }])
+        }
+
+        /// Próximo evento de ferramenta, ignorando o resto.
+        async fn next_tool_event(rx: &mut broadcast::Receiver<EngineEvent>) -> EngineEvent {
+            loop {
+                let event = next_non_level(rx).await;
+                if matches!(
+                    event,
+                    EngineEvent::ToolRequested { .. }
+                        | EngineEvent::ToolConfirmNeeded { .. }
+                        | EngineEvent::ToolResult { .. }
+                ) {
+                    return event;
+                }
+            }
+        }
+
+        async fn next_response(rx: &mut mpsc::UnboundedReceiver<Vec<ToolResult>>) -> ToolResult {
+            let mut batch = tokio::time::timeout(Duration::from_secs(2), rx.recv())
+                .await
+                .expect("resposta dentro de 2s")
+                .expect("canal aberto");
+            assert_eq!(batch.len(), 1);
+            batch.remove(0)
+        }
+
+        #[tokio::test]
+        async fn safe_tool_executes_and_responds() {
+            let mut h = start_tools(&["*"], Duration::from_secs(5)).await;
+            h.script
+                .send(call("c1", "app.open", json!({"name": "Safari"})))
+                .await
+                .unwrap();
+
+            assert_eq!(
+                next_tool_event(&mut h.events).await,
+                EngineEvent::ToolRequested {
+                    call: ToolCall {
+                        id: "c1".into(),
+                        name: "app.open".into(),
+                        args: json!({"name": "Safari"}),
+                    },
+                    risk: Risk::Safe,
+                }
+            );
+            let result = next_response(&mut h.responses).await;
+            assert_eq!(result, ToolResult::ok("c1", json!({"name": "Safari"})));
+            match next_tool_event(&mut h.events).await {
+                EngineEvent::ToolResult { id, name, ok, .. } => {
+                    assert_eq!((id.as_str(), name.as_str(), ok), ("c1", "app.open", true));
+                }
+                other => panic!("esperava ToolResult, veio {other:?}"),
+            }
+            h.handle.stop().await;
+        }
+
+        #[tokio::test]
+        async fn confirm_without_answer_is_denied_by_timeout() {
+            let mut h = start_tools(&["*"], Duration::from_millis(300)).await;
+            h.script
+                .send(call("c2", "shell.run", json!({"command": "ls"})))
+                .await
+                .unwrap();
+
+            assert!(matches!(
+                next_tool_event(&mut h.events).await,
+                EngineEvent::ToolRequested { risk: Risk::Confirm, .. }
+            ));
+            assert_eq!(
+                next_tool_event(&mut h.events).await,
+                EngineEvent::ToolConfirmNeeded {
+                    id: "c2".into(),
+                    name: "shell.run".into(),
+                    summary: "shell.run: ls".into(),
+                }
+            );
+            let result = next_response(&mut h.responses).await;
+            assert_eq!(result.id, "c2");
+            let error = result.error.expect("negado vira erro");
+            assert!(error.contains("sem confirmação"), "{error}");
+            assert!(matches!(
+                next_tool_event(&mut h.events).await,
+                EngineEvent::ToolResult { ok: false, .. }
+            ));
+            h.handle.stop().await;
+        }
+
+        #[tokio::test]
+        async fn voice_yes_approves_confirm() {
+            let mut h = start_tools(&["*"], Duration::from_secs(5)).await;
+            h.script
+                .send(call("c3", "shell.run", json!({"command": "ls"})))
+                .await
+                .unwrap();
+            assert!(matches!(
+                next_tool_event(&mut h.events).await,
+                EngineEvent::ToolRequested { .. }
+            ));
+            assert!(matches!(
+                next_tool_event(&mut h.events).await,
+                EngineEvent::ToolConfirmNeeded { .. }
+            ));
+            // Transcrição picada: "Si" + "m." só forma "sim" junta.
+            h.script.send(ServerEvent::UserText("Si".into())).await.unwrap();
+            h.script.send(ServerEvent::UserText("m.".into())).await.unwrap();
+
+            let result = next_response(&mut h.responses).await;
+            assert_eq!(result, ToolResult::ok("c3", json!({"command": "ls"})));
+
+            // O modelo chama de novo a mesma ação ao ouvir o "sim": não
+            // executa nem pergunta outra vez.
+            h.script
+                .send(call("c3b", "shell.run", json!({"command": "ls"})))
+                .await
+                .unwrap();
+            let repeat = next_response(&mut h.responses).await;
+            assert_eq!(repeat.id, "c3b");
+            assert_eq!(repeat.output["status"], "já executada");
+            h.handle.stop().await;
+        }
+
+        #[tokio::test]
+        async fn yes_to_models_question_approves_the_call_that_follows() {
+            let mut h = start_tools(&["*"], Duration::from_secs(5)).await;
+            h.script
+                .send(ServerEvent::ModelText("Vou criar o card, confirma?".into()))
+                .await
+                .unwrap();
+            h.script.send(ServerEvent::TurnComplete).await.unwrap();
+            h.script.send(ServerEvent::UserText(" Sim.".into())).await.unwrap();
+            h.script
+                .send(call("c8", "shell.run", json!({"command": "ls"})))
+                .await
+                .unwrap();
+            let result = next_response(&mut h.responses).await;
+            assert_eq!(result, ToolResult::ok("c8", json!({"command": "ls"})));
+
+            // Sem pergunta do modelo, "sim" solto não aprova nada adiante.
+            h.script.send(ServerEvent::UserText(" sim".into())).await.unwrap();
+            h.script
+                .send(call("c9", "shell.run", json!({"command": "pwd"})))
+                .await
+                .unwrap();
+            assert!(
+                tokio::time::timeout(Duration::from_millis(300), h.responses.recv())
+                    .await
+                    .is_err(),
+                "c9 precisa esperar confirmação"
+            );
+            h.handle.stop().await;
+        }
+
+        #[tokio::test]
+        async fn voice_no_and_handle_resolve_confirms() {
+            let mut h = start_tools(&["*"], Duration::from_secs(5)).await;
+            h.script
+                .send(call("c4", "shell.run", json!({"command": "rm x"})))
+                .await
+                .unwrap();
+            h.script.send(ServerEvent::UserText("não, cancela".into())).await.unwrap();
+            let denied = next_response(&mut h.responses).await;
+            assert!(denied.error.unwrap().contains("negado"));
+
+            h.script
+                .send(call("c5", "shell.run", json!({"command": "ls"})))
+                .await
+                .unwrap();
+            loop {
+                if let EngineEvent::ToolConfirmNeeded { id, .. } =
+                    next_tool_event(&mut h.events).await
+                {
+                    if id == "c5" {
+                        break;
+                    }
+                }
+            }
+            h.handle.confirm_tool("c5", true);
+            let ok = next_response(&mut h.responses).await;
+            assert_eq!(ok.id, "c5");
+            assert!(ok.error.is_none());
+            h.handle.stop().await;
+        }
+
+        #[tokio::test]
+        async fn tool_outside_profile_is_refused_and_cancellation_drops_pending() {
+            let mut h = start_tools(&["app.*"], Duration::from_secs(5)).await;
+            h.script
+                .send(call("c6", "shell.run", json!({"command": "ls"})))
+                .await
+                .unwrap();
+            let refused = next_response(&mut h.responses).await;
+            assert!(refused.error.unwrap().contains("não permitida"));
+
+            let mut h = start_tools(&["*"], Duration::from_secs(5)).await;
+            h.script
+                .send(call("c7", "shell.run", json!({"command": "ls"})))
+                .await
+                .unwrap();
+            h.script
+                .send(ServerEvent::ToolCallCancellation(vec!["c7".into()]))
+                .await
+                .unwrap();
+            loop {
+                if let EngineEvent::ToolResult { id, ok, summary, .. } =
+                    next_tool_event(&mut h.events).await
+                {
+                    assert_eq!((id.as_str(), ok, summary.as_str()), ("c7", false, "cancelada"));
+                    break;
+                }
+            }
+            // "sim" depois do cancelamento não executa nada.
+            h.script.send(ServerEvent::UserText("sim".into())).await.unwrap();
+            assert!(
+                tokio::time::timeout(Duration::from_millis(300), h.responses.recv())
+                    .await
+                    .is_err(),
+                "cancelada não pode responder ao modelo"
+            );
+            h.handle.stop().await;
+        }
+    }
+
+    /// Ponta a ponta com a Live API real, as ferramentas reais e os MCPs do
+    /// ambiente: fala sintetizada pelo `say` do macOS entra como microfone.
+    /// `JRV_LIVE_SAY="abre o Safari" cargo test -p openjarvisbr-core --lib
+    /// live_tool_flow -- --ignored --nocapture`. `JRV_LIVE_ANSWER` (padrão
+    /// "sim") é dito quando surge um pedido de confirmação.
+    #[tokio::test]
+    #[ignore = "usa a Live API, o say do macOS e os MCPs reais"]
+    async fn live_tool_flow() {
+        let utterance = std::env::var("JRV_LIVE_SAY").unwrap_or_else(|_| "abre o Safari".into());
+        let answer = std::env::var("JRV_LIVE_ANSWER").unwrap_or_else(|_| "sim".into());
+        let settings = crate::config::load_settings();
+        let mut config = test_config();
+        config.api_key = crate::config::load_api_key().expect("chave da API");
+        config.system_prompt = crate::config::effective_system_prompt(&settings);
+        config.tools = vec!["*".into()];
+        config.mcp_servers = vec![
+            McpServerConfig {
+                name: "overclock".into(),
+                url: Some("http://127.0.0.1:${OVERCLOCK_MCP_PORT}/mcp".into()),
+                bearer_env: Some("OVERCLOCK_MCP_BEARER_TOKEN".into()),
+                ..Default::default()
+            },
+            McpServerConfig {
+                name: "overclick".into(),
+                url: Some("https://cloud.overclock.sh/mcp".into()),
+                bearer_env: Some("OVERCLICK_MCP_BEARER_TOKEN".into()),
+                ..Default::default()
+            },
+        ];
+
+        let (mic_tx, mic_rx) = mpsc::channel(64);
+        let handle = start_with(config, Backend::LiveMic(Some(mic_rx)))
+            .await
+            .expect("motor sobe");
+        let mut events = handle.events();
+
+        let speak = |text: String, mic: mpsc::Sender<Vec<i16>>| async move {
+            let pcm = synthesize(&text);
+            println!(">> fala: {text}");
+            // Ritmo de tempo real (20ms por bloco) e 2s de silêncio no fim
+            // para o VAD do servidor fechar o turno.
+            let silence = vec![0i16; 16_000 * 2];
+            for chunk in pcm.chunks(320).chain(silence.chunks(320)) {
+                if mic.send(chunk.to_vec()).await.is_err() {
+                    return;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        };
+        // Silêncio contínuo entre falas, como um microfone real.
+        let idle_mic = mic_tx.clone();
+        let idle = tokio::spawn(async move {
+            loop {
+                if idle_mic.send(vec![0i16; 320]).await.is_err() {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        });
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        idle.abort();
+        speak(utterance, mic_tx.clone()).await;
+        let idle_mic = mic_tx.clone();
+        let mut idle = tokio::spawn(async move {
+            loop {
+                if idle_mic.send(vec![0i16; 320]).await.is_err() {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        });
+
+        let deadline = Instant::now() + Duration::from_secs(90);
+        let mut results = Vec::new();
+        let mut asked = false;
+        let mut last_activity = Instant::now();
+        let mut model_turn = String::new();
+        while Instant::now() < deadline {
+            // Terminou quando algo executou e a conversa ficou quieta.
+            if !results.is_empty() && !asked && last_activity.elapsed() > Duration::from_secs(8) {
+                break;
+            }
+            let Ok(Ok(event)) =
+                tokio::time::timeout(Duration::from_millis(500), events.recv()).await
+            else {
+                continue;
+            };
+            if !matches!(event, EngineEvent::Level { .. } | EngineEvent::State(_)) {
+                last_activity = Instant::now();
+            }
+            match &event {
+                EngineEvent::Level { .. } | EngineEvent::State(_) => continue,
+                EngineEvent::UserText(t) => println!("   usuário: {t}"),
+                EngineEvent::ModelText(t) => {
+                    model_turn.push_str(t);
+                    println!("   jarvis: {t}");
+                }
+                EngineEvent::TurnComplete => {
+                    println!("   [turno]");
+                    asked |= engine_tools::asks_confirmation(&std::mem::take(&mut model_turn));
+                    if asked {
+                        // O modelo terminou de perguntar: responde por voz.
+                        asked = false;
+                        idle.abort();
+                        tokio::time::sleep(Duration::from_millis(900)).await;
+                        speak(answer.clone(), mic_tx.clone()).await;
+                        let idle_mic = mic_tx.clone();
+                        idle = tokio::spawn(async move {
+                            loop {
+                                if idle_mic.send(vec![0i16; 320]).await.is_err() {
+                                    break;
+                                }
+                                tokio::time::sleep(Duration::from_millis(20)).await;
+                            }
+                        });
+                    }
+                }
+                EngineEvent::ToolRequested { call, risk } => {
+                    println!("   [requested] {} {:?}", engine_tools::call_summary(call), risk)
+                }
+                EngineEvent::ToolConfirmNeeded { summary, .. } => {
+                    println!("   [confirm_needed] {summary}");
+                    asked = true;
+                }
+                EngineEvent::ToolResult { name, ok, summary, .. } => {
+                    println!("   [result] {name} ok={ok}: {summary}");
+                    results.push(*ok);
+                }
+                other => println!("   {other:?}"),
+            }
+        }
+        idle.abort();
+        handle.stop().await;
+        assert!(results.contains(&true), "nenhuma ferramenta executou com sucesso");
+    }
+
+    /// Texto → PCM 16kHz mono pelo `say` do macOS.
+    fn synthesize(text: &str) -> Vec<i16> {
+        let path = std::env::temp_dir().join(format!("jrv59-say-{}.wav", std::process::id()));
+        let status = std::process::Command::new("say")
+            .args(["-v", "Luciana", "--data-format=LEI16@16000", "-o"])
+            .arg(&path)
+            .arg(text)
+            .status()
+            .expect("say");
+        assert!(status.success());
+        let reader = hound::WavReader::open(&path).expect("wav do say");
+        reader.into_samples::<i16>().map(|s| s.unwrap()).collect()
     }
 }

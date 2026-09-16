@@ -6,6 +6,7 @@
 
 mod commands;
 mod errors;
+mod tool_events;
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
@@ -304,6 +305,9 @@ fn handle_engine_event(app: &AppHandle, event: EngineEvent) {
                 serde_json::json!({ "state": "connecting", "reconnecting": true, "attempt": attempt }),
             );
         }
+        event @ (EngineEvent::ToolRequested { .. }
+        | EngineEvent::ToolConfirmNeeded { .. }
+        | EngineEvent::ToolResult { .. }) => tool_events::emit(app, &event),
         EngineEvent::Error { kind, message } => {
             let _ = app.emit(
                 "engine://error",
@@ -332,6 +336,7 @@ fn build_engine_config(api_key: String, greeting: Option<String>) -> EngineConfi
     let system_prompt = effective_system_prompt(&settings);
     let voice = effective_voice(&settings);
     let fx_amount = effective_fx_amount(&settings);
+    let tools = openjarvisbr_core::config::effective_tool_globs(&settings);
     EngineConfig {
         api_key,
         voice,
@@ -342,6 +347,8 @@ fn build_engine_config(api_key: String, greeting: Option<String>) -> EngineConfi
         system_prompt,
         fx_amount,
         greeting,
+        tools,
+        mcp_servers: settings.mcp_servers,
     }
 }
 

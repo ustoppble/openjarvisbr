@@ -57,6 +57,24 @@ struct FileConfig {
     /// customizado com o mesmo id de um embutido o sobrescreve.
     #[serde(default)]
     profiles: Vec<Profile>,
+    /// Seção `[tools]`.
+    tools: Option<ToolsSection>,
+}
+
+/// `[tools]` no config.toml.
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+pub struct ToolsSection {
+    /// Liga/desliga todas as ferramentas. Ausente = ligadas.
+    pub enabled: Option<bool>,
+}
+
+/// Globs de ferramentas para o motor: nenhum com `[tools].enabled = false`,
+/// senão a allow-list do perfil ativo.
+pub fn effective_tool_globs(settings: &Settings) -> Vec<String> {
+    if !settings.tools_enabled {
+        return Vec::new();
+    }
+    effective_profile(settings).tools
 }
 
 /// Marcador substituído pelo nome (ou por "você", sem nome) num
@@ -176,6 +194,8 @@ pub struct Settings {
     pub profile: Option<String>,
     /// Perfis próprios do usuário (`[[profiles]]`).
     pub custom_profiles: Vec<Profile>,
+    /// `[tools].enabled` (padrão ligado).
+    pub tools_enabled: bool,
 }
 
 /// Estilo do overlay já resolvido: `surreal` (padrão) ou `orb`.
@@ -211,6 +231,8 @@ struct FileConfigOut {
     profile: Option<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     profiles: Vec<Profile>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tools: Option<ToolsSection>,
 }
 
 /// Campos que a janela de configurações grava. `api_key` só vem preenchido
@@ -305,6 +327,7 @@ pub fn load_settings() -> Settings {
         mcp_servers: parsed.mcp_servers,
         profile: parsed.profile.filter(|s| !s.trim().is_empty()),
         custom_profiles: parsed.profiles,
+        tools_enabled: parsed.tools.and_then(|t| t.enabled).unwrap_or(true),
     }
 }
 
@@ -368,6 +391,7 @@ pub fn save(update: SaveSettings) -> Result<(), ConfigError> {
             .filter(|s| !s.trim().is_empty())
             .or(existing.profile),
         profiles: existing.profiles,
+        tools: existing.tools,
     };
 
     write_file_config(&path, &out)
@@ -394,6 +418,7 @@ pub fn save_profile(id: &str) -> Result<(), ConfigError> {
         mcp_servers: existing.mcp_servers.clone(),
         profile: Some(id.to_string()),
         profiles: existing.profiles.clone(),
+        tools: existing.tools.clone(),
     };
     write_file_config(&path, &out)
 }
@@ -420,6 +445,25 @@ mod tests {
         assert_eq!(b.key().as_deref(), Some("xyz"));
         let c: FileConfig = toml::from_str("api_key = \"\"").unwrap();
         assert_eq!(c.key(), None);
+    }
+
+    #[test]
+    fn tools_section_and_profile_globs() {
+        let on: FileConfig = toml::from_str("api_key = \"k\"").unwrap();
+        assert!(on.tools.is_none());
+        let off: FileConfig = toml::from_str("[tools]\nenabled = false\n").unwrap();
+        assert_eq!(off.tools.unwrap().enabled, Some(false));
+
+        let mut settings = Settings {
+            tools_enabled: true,
+            ..Settings::default()
+        };
+        assert_eq!(effective_tool_globs(&settings), ["*"]);
+        settings.profile = Some("therapist".to_string());
+        assert!(effective_tool_globs(&settings).is_empty());
+        settings.profile = Some("pair_programmer".to_string());
+        settings.tools_enabled = false;
+        assert!(effective_tool_globs(&settings).is_empty());
     }
 
     #[test]
@@ -571,6 +615,7 @@ mod tests {
                 system_prompt: "prompt próprio".to_string(),
                 voice: "Kore".to_string(),
                 fx_amount: 0.1,
+                tools: Vec::new(),
             }],
             ..Default::default()
         };

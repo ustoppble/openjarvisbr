@@ -145,6 +145,8 @@ fn main() {
         fx_amount: cli.fx_amount.unwrap_or_else(|| config::effective_fx_amount(&settings)),
         system_prompt,
         greeting: None,
+        tools: config::effective_tool_globs(&settings),
+        mcp_servers: settings.mcp_servers.clone(),
     };
     let barge_in = engine_config.barge_in;
     let fx_amount = engine_config.fx_amount.clamp(0.0, 1.0);

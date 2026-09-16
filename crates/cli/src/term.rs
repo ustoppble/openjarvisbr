@@ -1,6 +1,7 @@
 //! Terminal da OpenJarvisBR: imprime a transcrição colorida a partir dos
 //! eventos do Engine e traduz teclado (M muta, Ctrl+C encerra) em comandos.
 
+use std::collections::VecDeque;
 use std::io::{self, Write};
 use std::path::PathBuf;
 use std::time::Duration;
@@ -15,6 +16,7 @@ use tracing::{info, warn};
 use openjarvisbr_core::audio::capture::{self, CaptureError};
 use openjarvisbr_core::audio::playback::PlaybackError;
 use openjarvisbr_core::engine::{EngineError, EngineEvent, EngineHandle};
+use openjarvisbr_core::engine_tools::call_summary;
 
 /// Intervalo de checagem de eventos de teclado (raw mode).
 const KEY_POLL_INTERVAL: Duration = Duration::from_millis(200);
@@ -31,7 +33,7 @@ pub async fn run(
     let raw_mode = RawMode::enable();
     let (mut control_rx, _control_tx) = spawn_key_thread(raw_mode.enabled);
 
-    print_line("ouvindo — fale quando quiser (M muta o microfone, Ctrl+C encerra)");
+    print_line("ouvindo — fale quando quiser (M muta o microfone, S/N responde a um pedido de confirmação, Ctrl+C encerra)");
     if !barge_in {
         print_line("modo caixa de som: espere o Jarvis terminar pra falar (--barge-in libera interrupção por voz, use com fone)".dimmed());
     }
@@ -44,6 +46,8 @@ pub async fn run(
 
     let mut muted = false;
     let mut transcript = Transcript::default();
+    // Confirmações abertas, a mais antiga primeiro: S/N responde a ela.
+    let mut confirms: VecDeque<String> = VecDeque::new();
     let exit_code = loop {
         tokio::select! {
             event = events.recv() => match event {
@@ -55,6 +59,21 @@ pub async fn run(
                     eprint!("sessão encerrada: {message}\r\n");
                     break handle.last_error().map_or(0, |err| err.exit_code());
                 }
+                Ok(EngineEvent::ToolRequested { call, .. }) => {
+                    transcript.end_line();
+                    print_line(format!("[ferramenta] {}", call_summary(&call)).dimmed());
+                }
+                Ok(EngineEvent::ToolConfirmNeeded { id, summary, .. }) => {
+                    transcript.end_line();
+                    print_line(format!("[confirma?] {summary} — diga sim/não ou tecle S/N").yellow().bold());
+                    confirms.push_back(id);
+                }
+                Ok(EngineEvent::ToolResult { id, name, ok, summary }) => {
+                    confirms.retain(|pending| pending != &id);
+                    transcript.end_line();
+                    let line = format!("[{}] {name}: {summary}", if ok { "ok" } else { "falhou" });
+                    print_line(if ok { line.green() } else { line.red() });
+                }
                 Ok(EngineEvent::State(_) | EngineEvent::Level { .. } | EngineEvent::Reconnecting { .. }) => {}
                 Err(RecvError::Lagged(_)) => {}
                 Err(RecvError::Closed) => break 0,
@@ -65,6 +84,11 @@ pub async fn run(
                     handle.mute(muted);
                     transcript.end_line();
                     print_line(if muted { "[mic mudo]".yellow() } else { "[mic ativo]".yellow() });
+                }
+                ControlEvent::Confirm(approve) => {
+                    if let Some(id) = confirms.pop_front() {
+                        handle.confirm_tool(&id, approve);
+                    }
                 }
                 ControlEvent::Quit => {
                     info!("Ctrl+C recebido, encerrando");
@@ -118,6 +142,8 @@ pub fn report_start_error(err: &EngineError) {
 /// Eventos de teclado tratados pelo loop.
 enum ControlEvent {
     ToggleMute,
+    /// S (sim) ou N (não) para a confirmação de ferramenta mais antiga.
+    Confirm(bool),
     Quit,
 }
 
@@ -171,6 +197,12 @@ fn spawn_key_thread(enabled: bool) -> (mpsc::Receiver<ControlEvent>, mpsc::Sende
                             }
                             KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                                 Some(ControlEvent::Quit)
+                            }
+                            KeyCode::Char('s') | KeyCode::Char('S') => {
+                                Some(ControlEvent::Confirm(true))
+                            }
+                            KeyCode::Char('n') | KeyCode::Char('N') => {
+                                Some(ControlEvent::Confirm(false))
                             }
                             _ => None,
                         };
