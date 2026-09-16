@@ -139,19 +139,23 @@ impl Player {
                 .ok_or(PlaybackError::NoOutputDevice)?,
         };
 
-        let target_rate: cpal::SampleRate = SOURCE_RATE;
-        let supported = device
-            .supported_output_configs()?
-            .find(|range| range.contains_rate(target_rate));
-
-        let (config, needs_resample) = match supported {
-            Some(range) => (range.with_sample_rate(target_rate), false),
-            None => (device.default_output_config()?, true),
-        };
-
+        // Sempre a configuração nativa do dispositivo (taxa, canais, formato).
+        // Forçar 24kHz no CoreAudio abria a saída numa combinação não nativa
+        // (ex.: 4 canais) e o resultado soava picado; o resample por software
+        // com rubato é previsível em qualquer máquina.
+        let config = device.default_output_config()?;
         let device_channels = config.channels() as usize;
         let device_rate = config.sample_rate();
         let sample_format = config.sample_format();
+        let needs_resample = device_rate != SOURCE_RATE;
+        tracing::info!(
+            dispositivo = %device.description().map(|d| d.to_string()).unwrap_or_default(),
+            taxa = device_rate,
+            canais = device_channels,
+            formato = ?sample_format,
+            resample = needs_resample,
+            "playback aberto na configuração nativa"
+        );
         let stream_config: StreamConfig = config.into();
 
         // ~200ms de áudio antes de começar a tocar cada resposta.
