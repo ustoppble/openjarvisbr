@@ -14,6 +14,8 @@ use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;
 use serde::{Deserialize, Serialize};
 
+use crate::tools::{ToolCall, ToolResult, ToolSpec};
+
 /// Modelo padrão da v1 (spec: baixa latência).
 pub const MODEL: &str = "models/gemini-3.8-live";
 /// Voz padrão da v1.
@@ -40,6 +42,36 @@ pub struct Setup {
     pub generation_config: GenerationConfig,
     pub input_audio_transcription: AudioTranscriptionConfig,
     pub output_audio_transcription: AudioTranscriptionConfig,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub tools: Vec<ToolGroup>,
+}
+
+/// Um item de `setup.tools`: `{"functionDeclarations": [...]}`.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolGroup {
+    pub function_declarations: Vec<FunctionDeclaration>,
+}
+
+/// Declaração de função. `parametersJsonSchema` aceita JSON Schema completo
+/// (o campo `parameters` só aceita o subconjunto OpenAPI).
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FunctionDeclaration {
+    pub name: String,
+    pub description: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parameters_json_schema: Option<serde_json::Value>,
+}
+
+impl From<&ToolSpec> for FunctionDeclaration {
+    fn from(spec: &ToolSpec) -> Self {
+        FunctionDeclaration {
+            name: spec.name.clone(),
+            description: spec.description.clone(),
+            parameters_json_schema: (!spec.parameters.is_null()).then(|| spec.parameters.clone()),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -97,6 +129,7 @@ impl SetupRequest {
                 },
                 input_audio_transcription: AudioTranscriptionConfig::default(),
                 output_audio_transcription: AudioTranscriptionConfig::default(),
+                tools: Vec::new(),
             },
         }
     }
@@ -108,6 +141,19 @@ impl SetupRequest {
         self.setup.system_instruction = Some(SystemInstruction {
             parts: vec![TextPart { text: text.into() }],
         });
+        self
+    }
+
+    /// Declara as ferramentas que o modelo pode pedir. Lista vazia não
+    /// envia o campo `tools`.
+    pub fn with_tools(mut self, specs: &[ToolSpec]) -> Self {
+        self.setup.tools = if specs.is_empty() {
+            Vec::new()
+        } else {
+            vec![ToolGroup {
+                function_declarations: specs.iter().map(FunctionDeclaration::from).collect(),
+            }]
+        };
         self
     }
 }
@@ -195,6 +241,66 @@ impl ClientContentRequest {
     }
 }
 
+/// `{"toolResponse": {"functionResponses": [...]}}` — resultados das
+/// ferramentas pedidas em `toolCall`, casados pelo `id`.
+#[derive(Debug, Clone, Serialize)]
+pub struct ToolResponseRequest {
+    #[serde(rename = "toolResponse")]
+    pub tool_response: ToolResponse,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolResponse {
+    pub function_responses: Vec<FunctionResponse>,
+}
+
+/// `response` é sempre um objeto: `{"output": ...}` no sucesso e
+/// `{"error": "..."}` na falha, como a API recomenda. `name` não está em
+/// `ToolResult`; a sessão preenche a partir do `toolCall` recebido.
+#[derive(Debug, Clone, Serialize)]
+pub struct FunctionResponse {
+    pub id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    pub response: serde_json::Value,
+}
+
+impl From<&ToolResult> for FunctionResponse {
+    fn from(result: &ToolResult) -> Self {
+        let response = match &result.error {
+            Some(error) => serde_json::json!({ "error": error }),
+            None => serde_json::json!({ "output": result.output }),
+        };
+        FunctionResponse {
+            id: result.id.clone(),
+            name: None,
+            response,
+        }
+    }
+}
+
+impl ToolResponseRequest {
+    pub fn new(results: &[ToolResult]) -> Self {
+        ToolResponseRequest {
+            tool_response: ToolResponse {
+                function_responses: results.iter().map(FunctionResponse::from).collect(),
+            },
+        }
+    }
+
+    /// Preenche `name` de cada resposta a partir do `id` (sem nome
+    /// conhecido, o campo não vai).
+    pub fn with_names(mut self, mut name_of: impl FnMut(&str) -> Option<String>) -> Self {
+        for response in &mut self.tool_response.function_responses {
+            if response.name.is_none() {
+                response.name = name_of(&response.id);
+            }
+        }
+        self
+    }
+}
+
 // ---------------------------------------------------------------------
 // Mensagens de entrada (servidor -> cliente)
 // ---------------------------------------------------------------------
@@ -208,6 +314,32 @@ struct ServerMessage {
     server_content: Option<ServerContent>,
     #[serde(default)]
     go_away: Option<GoAway>,
+    #[serde(default)]
+    tool_call: Option<ToolCallMessage>,
+    #[serde(default)]
+    tool_call_cancellation: Option<ToolCallCancellationMessage>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ToolCallMessage {
+    #[serde(default)]
+    function_calls: Vec<FunctionCall>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct FunctionCall {
+    #[serde(default)]
+    id: String,
+    name: String,
+    #[serde(default)]
+    args: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct ToolCallCancellationMessage {
+    #[serde(default)]
+    ids: Vec<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -276,6 +408,12 @@ pub enum ServerEvent {
     /// fechar a linha da transcrição corrente.
     TurnComplete,
     GoAway,
+    /// O modelo pede a execução destas ferramentas (`toolCall`). Sem `args`
+    /// no JSON, `args` vem como objeto vazio.
+    ToolCall(Vec<ToolCall>),
+    /// O servidor cancelou chamadas pendentes (`toolCallCancellation`), pelos
+    /// ids — normalmente porque o usuário interrompeu.
+    ToolCallCancellation(Vec<String>),
     /// Produzido por `session.rs` antes de cada tentativa de reconexão
     /// automática (1, 2, 3) — nunca vem de `parse`.
     Reconnecting(u32),
@@ -326,6 +464,28 @@ pub fn parse_all(raw: &str) -> Result<Vec<ServerEvent>, ProtocolError> {
 
     if message.go_away.is_some() {
         events.push(ServerEvent::GoAway);
+    }
+
+    if let Some(cancel) = message.tool_call_cancellation {
+        events.push(ServerEvent::ToolCallCancellation(cancel.ids));
+    }
+
+    if let Some(call) = message.tool_call {
+        let calls: Vec<ToolCall> = call
+            .function_calls
+            .into_iter()
+            .map(|fc| ToolCall {
+                id: fc.id,
+                name: fc.name,
+                args: fc
+                    .args
+                    .filter(|args| !args.is_null())
+                    .unwrap_or_else(|| serde_json::json!({})),
+            })
+            .collect();
+        if !calls.is_empty() {
+            events.push(ServerEvent::ToolCall(calls));
+        }
     }
 
     if let Some(content) = message.server_content {
@@ -475,6 +635,146 @@ mod tests {
         let req = RealtimeInputRequest::from_pcm(&[0, 100, -100, 32767, -32768]);
         assert_eq!(req.realtime_input.audio.data, "AABkAJz//38AgA==");
         assert_eq!(req.realtime_input.audio.mime_type, INPUT_AUDIO_MIME);
+    }
+
+    fn clock_spec() -> ToolSpec {
+        ToolSpec {
+            name: "clock.now".into(),
+            description: "Retorna a hora atual local.".into(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {"timezone": {"type": "string"}},
+                "required": ["timezone"],
+                "additionalProperties": false
+            }),
+            risk: crate::tools::Risk::Safe,
+        }
+    }
+
+    #[test]
+    fn parses_tool_call_fixture() {
+        // Capturado da Live API real (gemini-3.8-live) com `clock.now` declarada.
+        let raw = fixture("tool_call.json");
+        assert_eq!(
+            parse_all(&raw).unwrap(),
+            vec![ServerEvent::ToolCall(vec![ToolCall {
+                id: "call_175775".into(),
+                name: "clock.now".into(),
+                args: serde_json::json!({"timezone": "America/Sao_Paulo"}),
+            }])]
+        );
+    }
+
+    #[test]
+    fn tool_call_without_args_gets_empty_object() {
+        let raw = r#"{"toolCall":{"functionCalls":[{"id":"call_1","name":"app.open"}]}}"#;
+        match parse(raw).unwrap() {
+            ServerEvent::ToolCall(calls) => assert_eq!(calls[0].args, serde_json::json!({})),
+            other => panic!("esperava ToolCall, veio {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_tool_call_cancellation_fixture() {
+        let raw = fixture("tool_call_cancellation.json");
+        assert_eq!(
+            parse(&raw).unwrap(),
+            ServerEvent::ToolCallCancellation(vec!["call_175775".into()])
+        );
+    }
+
+    #[test]
+    fn empty_and_usage_only_messages_have_no_event() {
+        for raw in ["{}", r#"{"usageMetadata":{"totalTokenCount":10}}"#] {
+            assert!(matches!(parse_all(raw), Err(ProtocolError::NoEvent)), "{raw}");
+        }
+    }
+
+    #[test]
+    fn setup_with_tools_serializes_function_declarations() {
+        let request = SetupRequest::default().with_tools(&[clock_spec()]);
+        let value = serde_json::to_value(&request).unwrap();
+        assert_eq!(
+            value["setup"]["tools"],
+            serde_json::json!([{
+                "functionDeclarations": [{
+                    "name": "clock.now",
+                    "description": "Retorna a hora atual local.",
+                    "parametersJsonSchema": {
+                        "type": "object",
+                        "properties": {"timezone": {"type": "string"}},
+                        "required": ["timezone"],
+                        "additionalProperties": false
+                    }
+                }]
+            }])
+        );
+    }
+
+    #[test]
+    fn setup_without_tools_omits_field_and_null_schema_is_omitted() {
+        let json = serde_json::to_string(&SetupRequest::default().with_tools(&[])).unwrap();
+        assert!(!json.contains("\"tools\""), "{json}");
+
+        let mut spec = clock_spec();
+        spec.parameters = serde_json::Value::Null;
+        let value = serde_json::to_value(SetupRequest::default().with_tools(&[spec])).unwrap();
+        let declaration = &value["setup"]["tools"][0]["functionDeclarations"][0];
+        assert!(declaration.get("parametersJsonSchema").is_none(), "{declaration}");
+    }
+
+    #[test]
+    fn tool_response_serializes_output_and_error() {
+        let results = [
+            ToolResult {
+                id: "a".into(),
+                output: serde_json::json!({"time": "14:32"}),
+                error: None,
+            },
+            ToolResult {
+                id: "b".into(),
+                output: serde_json::Value::Null,
+                error: Some("negado pelo usuário".into()),
+            },
+        ];
+        let value = serde_json::to_value(ToolResponseRequest::new(&results)).unwrap();
+        assert_eq!(
+            value,
+            serde_json::json!({"toolResponse": {"functionResponses": [
+                {"id": "a", "response": {"output": {"time": "14:32"}}},
+                {"id": "b", "response": {"error": "negado pelo usuário"}}
+            ]}})
+        );
+    }
+
+    #[test]
+    fn tool_call_round_trip_answers_with_same_id_and_name() {
+        // Ida: toolCall real do servidor. Volta: toolResponse com o mesmo id
+        // e o nome recuperado do pedido — o formato que o servidor aceitou
+        // no teste ao vivo.
+        let ServerEvent::ToolCall(calls) = parse(&fixture("tool_call.json")).unwrap() else {
+            panic!("fixture deveria ser toolCall");
+        };
+        let results: Vec<ToolResult> = calls
+            .iter()
+            .map(|call| ToolResult {
+                id: call.id.clone(),
+                output: serde_json::json!({"time": "14:32", "tz": call.args["timezone"]}),
+                error: None,
+            })
+            .collect();
+        let request = ToolResponseRequest::new(&results).with_names(|id| {
+            calls.iter().find(|c| c.id == id).map(|c| c.name.clone())
+        });
+        let value = serde_json::to_value(request).unwrap();
+        assert_eq!(
+            value,
+            serde_json::json!({"toolResponse": {"functionResponses": [{
+                "id": "call_175775",
+                "name": "clock.now",
+                "response": {"output": {"time": "14:32", "tz": "America/Sao_Paulo"}}
+            }]}})
+        );
     }
 
     #[test]

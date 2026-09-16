@@ -13,7 +13,7 @@
 //! fora não devem acender `dead_code`.
 #![allow(dead_code)]
 
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -29,8 +29,9 @@ use tracing::{debug, info, warn};
 
 use super::protocol::{
     self, ClientContent, ClientContentRequest, ProtocolError, RealtimeInputRequest, ServerEvent,
-    SetupRequest, TextPart, Turn,
+    SetupRequest, TextPart, ToolResponseRequest, Turn,
 };
+use crate::tools::{ToolResult, ToolSpec};
 
 /// Host da Live API — único pedaço do endereço que pode ir para log.
 pub const HOST: &str = "generativelanguage.googleapis.com";
@@ -56,6 +57,8 @@ pub struct LiveConfig {
     pub raw_log: Option<std::path::PathBuf>,
     /// Instrução de sistema enviada no setup (identidade, idioma, regras).
     pub system_prompt: Option<String>,
+    /// Ferramentas declaradas no setup (e em cada reconexão).
+    pub tools: Vec<ToolSpec>,
 }
 
 impl LiveConfig {
@@ -65,11 +68,17 @@ impl LiveConfig {
             voice: voice.into(),
             raw_log: None,
             system_prompt: None,
+            tools: Vec::new(),
         }
     }
 
     pub fn with_system_prompt(mut self, text: impl Into<String>) -> Self {
         self.system_prompt = Some(text.into());
+        self
+    }
+
+    pub fn with_tools(mut self, tools: Vec<ToolSpec>) -> Self {
+        self.tools = tools;
         self
     }
 
@@ -89,6 +98,7 @@ impl std::fmt::Debug for LiveConfig {
         f.debug_struct("LiveConfig")
             .field("api_key", &"***")
             .field("voice", &self.voice)
+            .field("tools", &self.tools.len())
             .finish()
     }
 }
@@ -167,6 +177,7 @@ impl Backoff {
 /// diferentes do loop da app; o socket em si vive numa task própria.
 pub struct LiveSession {
     audio_tx: mpsc::Sender<Vec<i16>>,
+    tool_tx: mpsc::Sender<Vec<ToolResult>>,
     events: mpsc::Receiver<ServerEvent>,
     fatal: Arc<Mutex<Option<LiveError>>>,
     task: tokio::task::JoinHandle<()>,
@@ -178,6 +189,7 @@ impl LiveSession {
         let (sink, stream) = open(&cfg, None).await?;
 
         let (audio_tx, audio_rx) = mpsc::channel(CHANNEL_CAPACITY);
+        let (tool_tx, tool_rx) = mpsc::channel(CHANNEL_CAPACITY);
         let (event_tx, events) = mpsc::channel(CHANNEL_CAPACITY);
         let fatal = Arc::new(Mutex::new(None));
 
@@ -186,14 +198,17 @@ impl LiveSession {
             sink,
             stream,
             audio_rx,
+            tool_rx,
             event_tx,
             history: History::default(),
+            pending_tools: HashMap::new(),
             fatal: Arc::clone(&fatal),
         };
         let task = tokio::spawn(worker.run());
 
         Ok(LiveSession {
             audio_tx,
+            tool_tx,
             events,
             fatal,
             task,
@@ -206,6 +221,21 @@ impl LiveSession {
     pub fn send_audio(&self, samples: &[i16]) {
         if self.audio_tx.try_send(samples.to_vec()).is_err() {
             debug!("chunk de áudio descartado (sessão ocupada ou encerrada)");
+        }
+    }
+
+    /// Devolve ao modelo os resultados de um `ServerEvent::ToolCall`. Não
+    /// descarta como o áudio: a fila só enche se a sessão travou, e aí o
+    /// aviso vai para o log.
+    pub fn send_tool_response(&self, results: &[ToolResult]) {
+        if results.is_empty() {
+            return;
+        }
+        if self.tool_tx.try_send(results.to_vec()).is_err() {
+            warn!(
+                quantidade = results.len(),
+                "resposta de ferramenta perdida (sessão encerrada ou fila cheia)"
+            );
         }
     }
 
@@ -278,8 +308,12 @@ struct Worker {
     sink: Sink,
     stream: Stream,
     audio_rx: mpsc::Receiver<Vec<i16>>,
+    tool_rx: mpsc::Receiver<Vec<ToolResult>>,
     event_tx: mpsc::Sender<ServerEvent>,
     history: History,
+    /// id -> nome das chamadas pedidas e ainda sem resposta, para preencher
+    /// `functionResponses[].name`.
+    pending_tools: HashMap<String, String>,
     fatal: Arc<Mutex<Option<LiveError>>>,
 }
 
@@ -295,6 +329,10 @@ impl Worker {
             let step = tokio::select! {
                 chunk = self.audio_rx.recv() => match chunk {
                     Some(samples) => self.send_audio(&samples).await,
+                    None => Step::Stop,
+                },
+                results = self.tool_rx.recv() => match results {
+                    Some(results) => self.send_tool_response(&results).await,
                     None => Step::Stop,
                 },
                 msg = self.stream.next() => self.handle(msg).await,
@@ -326,6 +364,24 @@ impl Worker {
             Ok(()) => Step::Continue,
             Err(err) => {
                 warn!(host = HOST, erro = %scrub(&err.to_string(), &self.cfg.api_key), "falha ao enviar áudio");
+                Step::Reconnect
+            }
+        }
+    }
+
+    async fn send_tool_response(&mut self, results: &[ToolResult]) -> Step {
+        let pending = &mut self.pending_tools;
+        let request = ToolResponseRequest::new(results).with_names(|id| pending.remove(id));
+        let Ok(json) = serde_json::to_string(&request) else {
+            return Step::Continue;
+        };
+        match self.sink.send(Message::text(json)).await {
+            Ok(()) => {
+                debug!(quantidade = results.len(), "resposta de ferramenta enviada");
+                Step::Continue
+            }
+            Err(err) => {
+                warn!(host = HOST, erro = %scrub(&err.to_string(), &self.cfg.api_key), "falha ao enviar resposta de ferramenta");
                 Step::Reconnect
             }
         }
@@ -374,6 +430,16 @@ impl Worker {
             match &event {
                 ServerEvent::UserText(text) => self.history.push(Speaker::User, text),
                 ServerEvent::ModelText(text) => self.history.push(Speaker::Model, text),
+                ServerEvent::ToolCall(calls) => {
+                    for call in calls {
+                        self.pending_tools.insert(call.id.clone(), call.name.clone());
+                    }
+                }
+                ServerEvent::ToolCallCancellation(ids) => {
+                    for id in ids {
+                        self.pending_tools.remove(id);
+                    }
+                }
                 ServerEvent::GoAway => {
                     info!(host = HOST, "goAway recebido, reconectando");
                     step = Step::Reconnect;
@@ -436,6 +502,7 @@ async fn open(cfg: &LiveConfig, context: Option<&str>) -> Result<(Sink, Stream),
     if let Some(prompt) = &cfg.system_prompt {
         request = request.with_system_instruction(prompt.clone());
     }
+    request = request.with_tools(&cfg.tools);
     let setup = serde_json::to_string(&request)
         .map_err(|err| LiveError::Connect(err.to_string()))?;
     sink.send(Message::text(setup))

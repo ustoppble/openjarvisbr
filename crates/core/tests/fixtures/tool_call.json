@@ -1,0 +1,13 @@
+{
+  "toolCall": {
+    "functionCalls": [
+      {
+        "name": "clock.now",
+        "args": {
+          "timezone": "America/Sao_Paulo"
+        },
+        "id": "call_175775"
+      }
+    ]
+  }
+}

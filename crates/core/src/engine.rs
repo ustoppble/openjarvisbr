@@ -626,6 +626,8 @@ impl Worker {
                 }
                 info!("servidor pediu encerramento (goAway); reconectando");
             }
+            // Execução de ferramentas chega com o card E (JRV-53 só traz o protocolo).
+            Some(ServerEvent::ToolCall(_)) | Some(ServerEvent::ToolCallCancellation(_)) => {}
             Some(ServerEvent::Reconnecting(attempt)) => {
                 self.connecting = true;
                 self.update_state();

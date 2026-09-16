@@ -4,6 +4,7 @@
 use std::time::{Duration, Instant};
 
 use openjarvisbr_core::live::session::{LiveConfig, LiveError, LiveSession};
+use openjarvisbr_core::tools::{Risk, ToolSpec};
 
 #[tokio::test]
 #[ignore = "precisa de rede e GEMINI_API_KEY"]
@@ -24,6 +25,34 @@ async fn live_connect() {
         elapsed < Duration::from_secs(3),
         "setupComplete demorou {elapsed:?}"
     );
+    drop(session);
+}
+
+#[tokio::test]
+#[ignore = "precisa de rede e GEMINI_API_KEY"]
+async fn live_connect_with_tool() {
+    let Some(key) = std::env::var("GEMINI_API_KEY")
+        .ok()
+        .filter(|k| !k.is_empty())
+    else {
+        panic!("GEMINI_API_KEY não definida");
+    };
+
+    // Nome com ponto e JSON Schema completo (additionalProperties): o
+    // servidor tem que aceitar o setup assim, é o formato das tools da v3.
+    let tool = ToolSpec {
+        name: "clock.now".to_string(),
+        description: "Retorna a hora atual local.".to_string(),
+        parameters: serde_json::json!({
+            "type": "object",
+            "properties": {"timezone": {"type": "string", "description": "Fuso IANA"}},
+            "required": ["timezone"],
+            "additionalProperties": false
+        }),
+        risk: Risk::Safe,
+    };
+    let result = LiveSession::connect(LiveConfig::new(key, "Puck").with_tools(vec![tool])).await;
+    let session = result.unwrap_or_else(|err| panic!("setup com tool recusado: {err}"));
     drop(session);
 }
 
