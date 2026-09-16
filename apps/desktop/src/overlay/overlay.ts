@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, UnlistenFn } from "@tauri-apps/api/event";
 import { createSurrealScene, SurrealScene, SurrealState } from "./surreal";
+import { ToolStrip } from "./tools";
 
 interface EnginePayload {
     state?: string;
@@ -39,16 +40,22 @@ class OverlayManager {
     private currentState = "idle";
     private listeners: UnlistenFn[] = [];
     private scene: SurrealScene | null = null;
+    private tools: ToolStrip;
 
     constructor() {
         this.container = document.getElementById("app") || document.body;
         this.userTextEl = this.container.querySelector("#user-line .text") as HTMLElement;
         this.modelTextEl = this.container.querySelector("#model-line .text") as HTMLElement;
         this.modelLineEl = document.getElementById("model-line") as HTMLElement;
+        this.tools = new ToolStrip(this.container, {
+            show: () => this.show(),
+            release: () => this.hideAfterDelay(HIDE_DELAY_MS),
+        });
     }
 
     async initialize() {
         await this.initializeScene();
+        await this.tools.initialize();
         this.listeners.push(
             await listen("engine://state", (event: any) => this.handleStateChange(event.payload))
         );
@@ -164,6 +171,7 @@ class OverlayManager {
     }
 
     private hide() {
+        if (this.tools.holdsOverlay()) return;
         this.container.classList.remove("visible");
     }
 
@@ -190,6 +198,7 @@ class OverlayManager {
             clearTimeout(this.hideTimer);
         }
         this.scene?.unmount();
+        await this.tools.cleanup();
     }
 }
 

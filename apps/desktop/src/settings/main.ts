@@ -8,6 +8,7 @@
 // criada) e o evento `engine://settings-error` (janela já aberta).
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { startDrag } from "@crabnebula/tauri-plugin-drag";
 
 const VOICES = ["Puck", "Charon", "Kore", "Fenrir", "Aoede", "Leda", "Orus", "Zephyr"];
 
@@ -64,6 +65,9 @@ const bargeInCheckbox = $<HTMLInputElement>("barge-in");
 const overlayStyleSelect = $<HTMLSelectElement>("overlay-style");
 const systemPromptTextarea = $<HTMLTextAreaElement>("system-prompt");
 const restorePromptButton = $<HTMLButtonElement>("restore-prompt");
+const toolsEnabledCheckbox = $<HTMLInputElement>("tools-enabled");
+const mcpList = $<HTMLUListElement>("mcp-list");
+const mcpEmpty = $<HTMLDivElement>("mcp-empty");
 const saveButton = $<HTMLButtonElement>("save");
 const statusEl = $<HTMLSpanElement>("status");
 
@@ -86,6 +90,320 @@ function fillProfiles(available: ProfileOption[], current: string) {
 function updateProfileDescription() {
   const active = profiles.find((p) => p.id === profileSelect.value);
   profileDescription.textContent = active?.description ?? "";
+}
+
+// Aba Ferramentas (JRV-58): toggle geral (salvo com o resto do formulário),
+// permissões do macOS e servidores MCP. Tokens nunca voltam do backend: a
+// lista só diz de onde o token vem (env ou Keychain).
+type Grant = "concedida" | "pendente" | "negada" | "nao_instalado" | "erro";
+
+const GRANT_LABEL: Record<Grant, string> = {
+  concedida: "concedida",
+  pendente: "pendente",
+  negada: "negada",
+  nao_instalado: "não instalado",
+  erro: "erro",
+};
+
+interface AutomationTarget {
+  id: string;
+  label: string;
+  status: Grant;
+}
+
+interface PermissionsPayload {
+  macos: boolean;
+  accessibility: Grant;
+  automation: AutomationTarget[] | null;
+  app_path: string;
+  is_bundle: boolean;
+  icon_data_url: string;
+}
+
+interface McpServerInfo {
+  name: string;
+  target: string;
+  transport: "http" | "stdio";
+  bearer_env: string | null;
+  bearer_env_present: boolean;
+  token_keychain: boolean;
+}
+
+interface ToolsSettingsPayload {
+  enabled: boolean;
+  mcp_servers: McpServerInfo[];
+  overclock_env_present: boolean;
+}
+
+interface McpTestResult {
+  ok: boolean;
+  message: string;
+}
+
+const accessibilityStatus = $<HTMLSpanElement>("accessibility-status");
+const dragIcon = $<HTMLImageElement>("drag-icon");
+const appPathHint = $<HTMLSpanElement>("app-path-hint");
+const automationList = $<HTMLUListElement>("automation-list");
+const automationEmpty = $<HTMLDivElement>("automation-empty");
+const requestPermissionsButton = $<HTMLButtonElement>("request-permissions");
+const mcpForm = $<HTMLDivElement>("mcp-form");
+const mcpName = $<HTMLInputElement>("mcp-name");
+const mcpTarget = $<HTMLInputElement>("mcp-target");
+const mcpToken = $<HTMLInputElement>("mcp-token");
+const mcpTokenHint = $<HTMLDivElement>("mcp-token-hint");
+const mcpBearerEnv = $<HTMLInputElement>("mcp-bearer-env");
+const mcpAdvanced = $<HTMLDetailsElement>("mcp-advanced");
+
+const ACCESSIBILITY_POLL_MS = 3000;
+let accessibilityTimer: number | null = null;
+let appPath = "";
+let iconDataUrl = "";
+let overclockEnvPresent = false;
+
+function setBadge(el: HTMLElement, text: string, tone: string) {
+  el.textContent = text;
+  el.className = `badge ${tone}`.trim();
+}
+
+function setGrant(el: HTMLElement, grant: Grant) {
+  setBadge(el, GRANT_LABEL[grant], grant);
+}
+
+async function refreshAccessibility() {
+  setGrant(accessibilityStatus, await invoke<Grant>("check_accessibility"));
+}
+
+// Checa Acessibilidade a cada 3s só enquanto a aba está aberta.
+function setAccessibilityPolling(active: boolean) {
+  if (accessibilityTimer !== null) {
+    clearInterval(accessibilityTimer);
+    accessibilityTimer = null;
+  }
+  if (!active) return;
+  void refreshAccessibility();
+  accessibilityTimer = window.setInterval(() => void refreshAccessibility(), ACCESSIBILITY_POLL_MS);
+}
+
+function selectTab(tab: string) {
+  document.body.classList.toggle("tab-tools", tab === "tools");
+  document.querySelectorAll<HTMLButtonElement>(".tabs button").forEach((button) => {
+    button.classList.toggle("active", button.dataset.tab === tab);
+  });
+  setAccessibilityPolling(tab === "tools");
+}
+
+document.querySelectorAll<HTMLButtonElement>(".tabs button").forEach((button) => {
+  button.addEventListener("click", () => selectTab(button.dataset.tab ?? "general"));
+});
+
+function renderAutomation(targets: AutomationTarget[]) {
+  automationEmpty.hidden = targets.length > 0;
+  for (const target of targets) {
+    let item = automationList.querySelector<HTMLLIElement>(`li[data-id="${CSS.escape(target.id)}"]`);
+    if (!item) {
+      item = document.createElement("li");
+      item.dataset.id = target.id;
+      const label = document.createElement("span");
+      label.textContent = target.label;
+      const badge = document.createElement("span");
+      badge.className = "badge";
+      item.append(label, badge);
+      automationList.appendChild(item);
+    }
+    setGrant(item.querySelector(".badge") as HTMLElement, target.status);
+  }
+}
+
+async function loadPermissions() {
+  const permissions = await invoke<PermissionsPayload>("get_permissions");
+  $<HTMLDivElement>("permissions-section").hidden = !permissions.macos;
+  setGrant(accessibilityStatus, permissions.accessibility);
+  appPath = permissions.app_path;
+  iconDataUrl = permissions.icon_data_url;
+  dragIcon.src = iconDataUrl;
+  appPathHint.textContent = permissions.is_bundle
+    ? ""
+    : "(modo desenvolvimento: arrasta o binário do app)";
+  if (permissions.automation) renderAutomation(permissions.automation);
+}
+
+listen<AutomationTarget>("tools://automation", (event) => renderAutomation([event.payload]));
+
+// Drag-out nativo do bundle do app em execução (tauri-plugin-drag).
+dragIcon.addEventListener("mousedown", (event) => {
+  if (event.button !== 0 || !appPath) return;
+  event.preventDefault();
+  startDrag({ item: [appPath], icon: iconDataUrl }).catch((err) => setStatus(String(err), "error"));
+});
+
+requestPermissionsButton.addEventListener("click", async () => {
+  requestPermissionsButton.disabled = true;
+  try {
+    renderAutomation(await invoke<AutomationTarget[]>("request_permissions"));
+    await refreshAccessibility();
+  } catch (err) {
+    setStatus(String(err), "error");
+  } finally {
+    requestPermissionsButton.disabled = false;
+  }
+});
+
+$<HTMLButtonElement>("request-accessibility").addEventListener("click", async () => {
+  setGrant(accessibilityStatus, await invoke<Grant>("request_accessibility"));
+});
+
+$<HTMLButtonElement>("reveal-app").addEventListener("click", () => {
+  invoke("reveal_app").catch((err) => setStatus(String(err), "error"));
+});
+
+for (const [id, pane] of [
+  ["open-automation", "automation"],
+  ["open-accessibility", "accessibility"],
+] as const) {
+  $<HTMLButtonElement>(id).addEventListener("click", () => {
+    invoke("open_privacy_pane", { pane }).catch((err) => setStatus(String(err), "error"));
+  });
+}
+
+function describeAuth(server: McpServerInfo): string {
+  if (server.bearer_env) {
+    return `token: env ${server.bearer_env} (${server.bearer_env_present ? "presente" : "ausente"})`;
+  }
+  return server.token_keychain ? "token: no Keychain" : "sem token";
+}
+
+function renderMcpServers(servers: McpServerInfo[]) {
+  mcpList.innerHTML = "";
+  mcpEmpty.hidden = servers.length > 0;
+  for (const server of servers) {
+    const item = document.createElement("li");
+    item.className = "mcp-item";
+
+    const head = document.createElement("div");
+    head.className = "card-head";
+    const name = document.createElement("span");
+    name.className = "mcp-name";
+    name.textContent = server.name;
+    const badge = document.createElement("span");
+    setBadge(badge, "desconhecido", "");
+    head.append(name, badge);
+
+    const target = document.createElement("span");
+    target.className = "mcp-meta";
+    target.textContent = `${server.transport === "http" ? "URL" : "comando"}: ${server.target}`;
+    const auth = document.createElement("span");
+    auth.className = "mcp-meta";
+    auth.textContent = describeAuth(server);
+
+    const buttons = document.createElement("div");
+    buttons.className = "button-row";
+    const test = document.createElement("button");
+    test.type = "button";
+    test.textContent = "Testar";
+    test.addEventListener("click", async () => {
+      test.disabled = true;
+      setBadge(badge, "testando…", "");
+      try {
+        const result = await invoke<McpTestResult>("test_mcp_server", { name: server.name });
+        setBadge(badge, result.ok ? `ok · ${result.message}` : `erro · ${result.message}`, result.ok ? "ok" : "fail");
+      } catch (err) {
+        setBadge(badge, `erro · ${String(err)}`, "fail");
+      } finally {
+        test.disabled = false;
+      }
+    });
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.textContent = "Remover";
+    remove.addEventListener("click", async () => {
+      remove.disabled = true;
+      try {
+        await invoke("remove_mcp_server", { name: server.name });
+        await loadTools();
+      } catch (err) {
+        setStatus(String(err), "error");
+        remove.disabled = false;
+      }
+    });
+    buttons.append(test, remove);
+
+    item.append(head, target, auth, buttons);
+    mcpList.appendChild(item);
+  }
+}
+
+function openMcpForm(preset: { name?: string; target?: string; bearerEnv?: string; hint?: string }) {
+  mcpForm.classList.add("open");
+  mcpName.value = preset.name ?? "";
+  mcpTarget.value = preset.target ?? "";
+  mcpToken.value = "";
+  mcpBearerEnv.value = preset.bearerEnv ?? "";
+  mcpAdvanced.open = Boolean(preset.bearerEnv);
+  mcpTokenHint.innerHTML = "";
+  if (preset.hint) mcpTokenHint.textContent = preset.hint;
+  (preset.name ? (preset.bearerEnv ? mcpName : mcpToken) : mcpName).focus();
+}
+
+$<HTMLButtonElement>("mcp-add").addEventListener("click", () => openMcpForm({}));
+
+$<HTMLButtonElement>("mcp-connect-overclock").addEventListener("click", () => {
+  openMcpForm({
+    name: "overclock",
+    target: "http://127.0.0.1:${OVERCLOCK_MCP_PORT}/mcp",
+    bearerEnv: "OVERCLOCK_MCP_BEARER_TOKEN",
+    hint: overclockEnvPresent
+      ? "env OVERCLOCK_MCP_BEARER_TOKEN encontrada neste processo — não precisa de token."
+      : "env OVERCLOCK_MCP_BEARER_TOKEN ausente: abra o Jarvis de dentro do Overclock ou cole um token.",
+  });
+});
+
+$<HTMLButtonElement>("mcp-connect-overclick").addEventListener("click", () => {
+  openMcpForm({ name: "overclick", target: "https://cloud.overclock.sh/mcp" });
+  mcpTokenHint.textContent = "Cole o token de API do OverClick. ";
+  const link = document.createElement("a");
+  link.className = "inline-link";
+  link.textContent = "Onde pegar o token";
+  link.addEventListener("click", () => {
+    invoke("open_tools_link", { link: "overclick_tokens" }).catch((err) => setStatus(String(err), "error"));
+  });
+  mcpTokenHint.appendChild(link);
+});
+
+$<HTMLButtonElement>("mcp-cancel").addEventListener("click", () => {
+  mcpToken.value = "";
+  mcpForm.classList.remove("open");
+});
+
+$<HTMLButtonElement>("mcp-save").addEventListener("click", async () => {
+  const saveServer = $<HTMLButtonElement>("mcp-save");
+  saveServer.disabled = true;
+  try {
+    const token = mcpToken.value.trim();
+    const bearerEnv = mcpBearerEnv.value.trim();
+    await invoke("add_mcp_server", {
+      server: {
+        name: mcpName.value.trim(),
+        target: mcpTarget.value.trim(),
+        token: token.length > 0 ? token : null,
+        bearer_env: bearerEnv.length > 0 ? bearerEnv : null,
+      },
+    });
+    mcpToken.value = "";
+    mcpForm.classList.remove("open");
+    setStatus("servidor salvo", "ok");
+    await loadTools();
+  } catch (err) {
+    setStatus(String(err), "error");
+  } finally {
+    saveServer.disabled = false;
+  }
+});
+
+async function loadTools() {
+  const tools = await invoke<ToolsSettingsPayload>("get_tools_settings");
+  toolsEnabledCheckbox.checked = tools.enabled;
+  overclockEnvPresent = tools.overclock_env_present;
+  renderMcpServers(tools.mcp_servers);
 }
 
 function fillVoices(current: string) {
@@ -204,6 +522,7 @@ saveButton.addEventListener("click", async () => {
         voice_fx_amount: Number(fxAmountInput.value),
         system_prompt: systemPromptTextarea.value,
         overlay_style: overlayStyleSelect.value,
+        tools_enabled: toolsEnabledCheckbox.checked,
       },
     });
     apiKeyInput.value = "";
@@ -217,3 +536,5 @@ saveButton.addEventListener("click", async () => {
 });
 
 load().catch((err) => setStatus(String(err), "error"));
+loadTools().catch((err) => setStatus(String(err), "error"));
+loadPermissions().catch((err) => setStatus(String(err), "error"));

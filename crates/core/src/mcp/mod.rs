@@ -3,8 +3,9 @@
 //! cada tool remota como uma `Tool` do contrato, com nome
 //! `mcp.<server>.<tool>` e o JSON Schema original.
 //!
-//! Tokens só entram por nome de env (`bearer_env`): o valor é lido na hora da
-//! requisição e nunca aparece em log, erro ou resultado.
+//! Tokens só entram por nome de env (`bearer_env`) ou pelo nome da entrada no
+//! Keychain/Credential Manager (`token_keychain`): o valor é lido na hora da
+//! requisição e nunca aparece em log, erro, config ou resultado.
 
 pub mod client;
 pub mod tool;
@@ -45,6 +46,44 @@ pub struct McpServerConfig {
     /// NOME da env com o bearer token (nunca o valor).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bearer_env: Option<String>,
+    /// Nome da entrada no Keychain (macOS) / Credential Manager (Windows)
+    /// com o bearer token, gravada pela aba Ferramentas (JRV-58). Usado só
+    /// quando `bearer_env` está ausente.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub token_keychain: Option<String>,
+}
+
+/// Serviço das entradas de token MCP no Keychain/Credential Manager.
+pub const KEYCHAIN_SERVICE: &str = "openjarvisbr-mcp";
+
+fn keychain_entry(name: &str) -> Result<keyring::Entry, McpError> {
+    keyring::Entry::new(KEYCHAIN_SERVICE, name)
+        .map_err(|_| McpError::Keychain(name.to_string()))
+}
+
+/// Token guardado no Keychain para `name`; ausente ou ilegível é erro (só
+/// com o nome, nunca o valor).
+pub fn keychain_token(name: &str) -> Result<String, McpError> {
+    keychain_entry(name)?
+        .get_password()
+        .ok()
+        .filter(|token| !token.is_empty())
+        .ok_or_else(|| McpError::Keychain(name.to_string()))
+}
+
+/// Grava (ou troca) o token de `name` no Keychain.
+pub fn set_keychain_token(name: &str, token: &str) -> Result<(), McpError> {
+    keychain_entry(name)?
+        .set_password(token)
+        .map_err(|_| McpError::Keychain(name.to_string()))
+}
+
+/// Apaga o token de `name`; entrada inexistente não é erro.
+pub fn delete_keychain_token(name: &str) -> Result<(), McpError> {
+    match keychain_entry(name)?.delete_credential() {
+        Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+        Err(_) => Err(McpError::Keychain(name.to_string())),
+    }
 }
 
 /// Falhas do cliente MCP. Mensagens nunca carregam token nem endereço.
@@ -54,6 +93,8 @@ pub enum McpError {
     NoTransport(String),
     #[error("variável de ambiente ausente: {0}")]
     MissingEnv(String),
+    #[error("token ausente no Keychain: {0}")]
+    Keychain(String),
     #[error("não autorizado (HTTP {0})")]
     Unauthorized(u16),
     #[error("HTTP {0}")]
@@ -202,6 +243,18 @@ args = ["server.js"]
             },
         ];
         assert!(load_all(&servers).await.is_empty());
+    }
+
+    /// Keychain real: `cargo test -p openjarvisbr-core keychain -- --ignored`.
+    #[test]
+    #[ignore = "grava e apaga uma entrada de teste no Keychain do usuário"]
+    fn keychain_roundtrip() {
+        let name = "openjarvisbr-teste-roundtrip";
+        set_keychain_token(name, "valor-de-teste").unwrap();
+        assert_eq!(keychain_token(name).unwrap(), "valor-de-teste");
+        delete_keychain_token(name).unwrap();
+        assert!(keychain_token(name).is_err());
+        delete_keychain_token(name).unwrap();
     }
 
     /// Servidores reais: `cargo test -p openjarvisbr-core mcp -- --ignored`.

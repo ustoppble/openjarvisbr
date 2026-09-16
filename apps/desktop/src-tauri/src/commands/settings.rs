@@ -108,6 +108,9 @@ pub struct SaveSettingsPayload {
     pub user_name: String,
     pub overlay_style: String,
     pub profile: String,
+    /// `[tools].enabled` da aba Ferramentas (JRV-58); ausente preserva.
+    #[serde(default)]
+    pub tools_enabled: Option<bool>,
 }
 
 /// Ajusta a intensidade do efeito de voz na sessão em andamento, sem
@@ -146,6 +149,12 @@ pub async fn save_settings(app: AppHandle, payload: SaveSettingsPayload) -> Resu
         || before_user_name != payload.user_name
         || profile_changed;
 
+    let tools_before = crate::tools_config::tools_enabled();
+    let tools_changed = payload.tools_enabled.is_some_and(|enabled| enabled != tools_before);
+    // O save do core só regrava os campos que conhece: guarda [tools] e
+    // [[mcp_servers]] para devolvê-los logo depois.
+    let preserved = crate::tools_config::preserve();
+
     save(SaveSettings {
         api_key: payload.api_key.clone(),
         system_prompt: Some(payload.system_prompt.clone()),
@@ -159,11 +168,15 @@ pub async fn save_settings(app: AppHandle, payload: SaveSettingsPayload) -> Resu
         profile: payload.profile.clone(),
     })
     .map_err(|err| err.to_string())?;
+    crate::tools_config::restore(preserved, payload.tools_enabled)?;
+    if tools_changed {
+        crate::set_tools_label(&app, !tools_before);
+    }
 
     if profile_changed {
         crate::sync_profile_menu(&app, &payload.profile);
         crate::restart_engine_with_greeting(app, Some(crate::PROFILE_GREETING.to_string())).await;
-    } else if needs_restart || payload.api_key.as_deref().is_some_and(|k| !k.is_empty()) {
+    } else if needs_restart || tools_changed || payload.api_key.as_deref().is_some_and(|k| !k.is_empty()) {
         crate::restart_engine(app).await;
     } else {
         set_fx_amount(app, payload.voice_fx_amount);

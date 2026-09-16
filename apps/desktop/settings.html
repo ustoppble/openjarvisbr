@@ -11,10 +11,19 @@
       * {
         box-sizing: border-box;
       }
+      [hidden] {
+        display: none !important;
+      }
+      html,
+      body {
+        overflow-x: hidden;
+      }
       body {
         margin: 0;
-        width: 520px;
-        height: 640px;
+        /* Largura fixa em 520px + barra de rolagem vertical estourava a janela
+           e cortava o conteúdo à esquerda; a janela já tem 520px. */
+        width: 100%;
+        min-height: 100vh;
         overflow-y: auto;
         background: #0c0c0c;
         color: #e0e0e0;
@@ -22,6 +31,8 @@
         font-size: 13px;
       }
       main {
+        max-width: 100%;
+        min-width: 0;
         padding: 20px 24px 28px;
         display: flex;
         flex-direction: column;
@@ -175,11 +186,180 @@
       .status.ok {
         color: #34d399;
       }
+      /* Abas (JRV-58): "Geral" é o formulário de sempre; "Ferramentas" esconde
+         os campos gerais sem reestruturar o HTML deles. */
+      .tabs {
+        display: flex;
+        gap: 6px;
+        border-bottom: 1px solid #2a2a2a;
+        margin-top: -6px;
+      }
+      .tabs button {
+        border: none;
+        border-bottom: 2px solid transparent;
+        border-radius: 0;
+        background: transparent;
+        color: #9c9c9c;
+        padding: 8px 10px;
+        font-size: 13px;
+      }
+      .tabs button.active {
+        color: #e0e0e0;
+        border-bottom-color: #7c3aed;
+      }
+      #tab-tools {
+        display: none;
+        flex-direction: column;
+        gap: 18px;
+      }
+      body.tab-tools #tab-tools {
+        display: flex;
+      }
+      body.tab-tools main > :not(h1):not(.tabs):not(#tab-tools):not(.actions) {
+        display: none;
+      }
+      #tab-tools > * {
+        min-width: 0;
+      }
+      .section-title {
+        font-size: 12px;
+        color: #9c9c9c;
+        margin: 0 0 8px;
+        font-weight: 500;
+      }
+      .card {
+        background: #121212;
+        border: 1px solid #2a2a2a;
+        border-radius: 8px;
+        padding: 12px;
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+      }
+      .card-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+      }
+      .card-title {
+        font-weight: 600;
+      }
+      .card-text {
+        font-size: 12px;
+        color: #a8a8a8;
+        line-height: 1.5;
+        margin: 0;
+      }
+      .badge {
+        font-size: 11px;
+        padding: 2px 8px;
+        border-radius: 999px;
+        border: 1px solid #2a2a2a;
+        color: #9c9c9c;
+        white-space: nowrap;
+      }
+      .badge.concedida,
+      .badge.ok {
+        color: #34d399;
+        border-color: rgba(52, 211, 153, 0.4);
+      }
+      .badge.pendente {
+        color: #fbbf24;
+        border-color: rgba(251, 191, 36, 0.4);
+      }
+      .badge.negada,
+      .badge.erro,
+      .badge.fail {
+        color: #f87171;
+        border-color: rgba(248, 113, 113, 0.4);
+      }
+      .drag-row {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+      }
+      .drag-icon {
+        width: 56px;
+        height: 56px;
+        flex: 0 0 auto;
+        cursor: grab;
+        border-radius: 12px;
+        border: 1px dashed #7c3aed;
+        padding: 4px;
+        user-select: none;
+        -webkit-user-drag: none;
+      }
+      .drag-icon:active {
+        cursor: grabbing;
+      }
+      .button-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+      .target-list,
+      .mcp-list {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+      }
+      .target-list li {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        font-size: 12px;
+      }
+      .mcp-item {
+        background: #161616;
+        border: 1px solid #2a2a2a;
+        border-radius: 6px;
+        padding: 8px 10px;
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+        min-width: 0;
+      }
+      .mcp-name {
+        font-weight: 600;
+      }
+      .mcp-meta {
+        font-size: 11px;
+        color: #7c7c7c;
+        overflow-wrap: anywhere;
+      }
+      .mcp-form {
+        display: none;
+        flex-direction: column;
+        gap: 10px;
+      }
+      .mcp-form.open {
+        display: flex;
+      }
+      .mcp-form details summary {
+        font-size: 12px;
+        color: #9c9c9c;
+        cursor: pointer;
+      }
+      .mcp-form details .field {
+        margin-top: 8px;
+      }
+      a.inline-link {
+        color: #a78bfa;
+        cursor: pointer;
+      }
     </style>
   </head>
   <body>
     <main id="app">
       <h1>Configurações</h1>
+      <nav class="tabs" role="tablist">
+        <button type="button" role="tab" class="active" data-tab="general">Geral</button>
+        <button type="button" role="tab" data-tab="tools">Ferramentas</button>
+      </nav>
       <div class="banner" id="no-key-banner">
         Nenhuma chave configurada. Cole a chave do Gemini abaixo e salve para
         ligar a OpenJarvisBR.
@@ -248,6 +428,89 @@
         </div>
         <textarea id="system-prompt" spellcheck="false"></textarea>
       </div>
+
+      <section id="tab-tools" role="tabpanel">
+        <div class="checkbox-row">
+          <input type="checkbox" id="tools-enabled" />
+          <label for="tools-enabled">Ferramentas ligadas (o Jarvis pode abrir apps, rodar comandos e usar MCP)</label>
+        </div>
+
+        <div class="field" id="permissions-section">
+          <p class="section-title">Permissões do macOS</p>
+          <div class="button-row">
+            <button type="button" id="request-permissions">Pedir permissões agora</button>
+          </div>
+          <div class="field-hint">Pede cada permissão uma vez: o macOS mostra os avisos e já lista o OpenJarvisBR nos painéis.</div>
+
+          <div class="card" style="margin-top: 12px">
+            <div class="card-head">
+              <span class="card-title">Acessibilidade</span>
+              <span class="badge" id="accessibility-status">verificando…</span>
+            </div>
+            <p class="card-text">Controla volume e teclas de mídia. Abra o painel e arraste o ícone para a lista (ou ligue o OpenJarvisBR se ele já aparecer).</p>
+            <div class="drag-row">
+              <img class="drag-icon" id="drag-icon" alt="Ícone do OpenJarvisBR" draggable="false" />
+              <div class="card-text">Arraste este ícone pra lista ao lado.<br /><span id="app-path-hint"></span></div>
+            </div>
+            <div class="button-row">
+              <button type="button" id="request-accessibility">Pedir permissão de Acessibilidade</button>
+              <button type="button" id="open-accessibility">Abrir painel</button>
+              <button type="button" id="reveal-app">Mostrar app no Finder</button>
+            </div>
+            <div class="field-hint">Mostrar no Finder: arraste o ícone pra lista do painel se ele não aparecer.</div>
+          </div>
+
+          <div class="card" style="margin-top: 12px">
+            <div class="card-head">
+              <span class="card-title">Automação</span>
+            </div>
+            <p class="card-text">Deixa o Jarvis falar com System Events, Calendário, Lembretes e players de música. O macOS não aceita arrastar nessa lista: o app aparece depois do primeiro pedido — use "Pedir permissões agora" e depois ligue as caixinhas no painel.</p>
+            <ul class="target-list" id="automation-list"></ul>
+            <div class="field-hint" id="automation-empty">Ainda não pedido nesta sessão.</div>
+            <div class="button-row">
+              <button type="button" id="open-automation">Abrir painel</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="field">
+          <p class="section-title">Servidores MCP</p>
+          <ul class="mcp-list" id="mcp-list"></ul>
+          <div class="field-hint" id="mcp-empty">Nenhum servidor configurado.</div>
+          <div class="button-row" style="margin-top: 10px">
+            <button type="button" id="mcp-add">Adicionar servidor</button>
+            <button type="button" id="mcp-connect-overclock">Conectar Overclock</button>
+            <button type="button" id="mcp-connect-overclick">Conectar OverClick</button>
+          </div>
+
+          <div class="card mcp-form" id="mcp-form" style="margin-top: 12px">
+            <div class="field">
+              <label for="mcp-name">Nome</label>
+              <input type="text" id="mcp-name" autocomplete="off" placeholder="ex.: overclick" />
+            </div>
+            <div class="field">
+              <label for="mcp-target">URL ou comando</label>
+              <input type="text" id="mcp-target" autocomplete="off" placeholder="https://… ou node server.js" />
+            </div>
+            <div class="field">
+              <label for="mcp-token">Token</label>
+              <input type="password" id="mcp-token" autocomplete="off" placeholder="guardado no Keychain, nunca no config" />
+              <div class="field-hint" id="mcp-token-hint"></div>
+            </div>
+            <details id="mcp-advanced">
+              <summary>Avançado: token por variável de ambiente</summary>
+              <div class="field">
+                <label for="mcp-bearer-env">Nome da env (bearer_env)</label>
+                <input type="text" id="mcp-bearer-env" autocomplete="off" placeholder="ex.: OVERCLOCK_MCP_BEARER_TOKEN" />
+              </div>
+            </details>
+            <div class="button-row">
+              <button type="button" id="mcp-save">Salvar servidor</button>
+              <button type="button" id="mcp-cancel">Cancelar</button>
+            </div>
+          </div>
+        </div>
+      </section>
 
       <div class="actions">
         <span class="status" id="status"></span>

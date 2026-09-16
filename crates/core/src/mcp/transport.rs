@@ -29,6 +29,7 @@ impl Transport {
             return Ok(Transport::Http(HttpTransport::new(
                 expand_env(url)?,
                 config.bearer_env.clone(),
+                config.token_keychain.clone(),
             )?));
         }
         if let Some(command) = &config.command {
@@ -68,12 +69,17 @@ pub struct HttpTransport {
     client: reqwest::Client,
     url: String,
     bearer_env: Option<String>,
+    token_keychain: Option<String>,
     session_id: Option<String>,
     protocol_version: Option<String>,
 }
 
 impl HttpTransport {
-    fn new(url: String, bearer_env: Option<String>) -> Result<Self, McpError> {
+    fn new(
+        url: String,
+        bearer_env: Option<String>,
+        token_keychain: Option<String>,
+    ) -> Result<Self, McpError> {
         // Mesmo provider rustls (ring) da sessão Live; falha só se já houver um.
         let _ = rustls::crypto::ring::default_provider().install_default();
         let client = reqwest::Client::builder()
@@ -85,6 +91,7 @@ impl HttpTransport {
             client,
             url,
             bearer_env,
+            token_keychain,
             session_id: None,
             protocol_version: None,
         })
@@ -97,13 +104,20 @@ impl HttpTransport {
             ACCEPT,
             HeaderValue::from_static("application/json, text/event-stream"),
         );
-        if let Some(env) = &self.bearer_env {
-            let token = std::env::var(env)
-                .ok()
-                .filter(|t| !t.is_empty())
-                .ok_or_else(|| McpError::MissingEnv(env.clone()))?;
+        let token = match (&self.bearer_env, &self.token_keychain) {
+            (Some(env), _) => Some((
+                std::env::var(env)
+                    .ok()
+                    .filter(|t| !t.is_empty())
+                    .ok_or_else(|| McpError::MissingEnv(env.clone()))?,
+                env.clone(),
+            )),
+            (None, Some(name)) => Some((super::keychain_token(name)?, name.clone())),
+            (None, None) => None,
+        };
+        if let Some((token, source)) = token {
             let mut value = HeaderValue::from_str(&format!("Bearer {token}"))
-                .map_err(|_| McpError::Protocol(format!("token inválido em {env}")))?;
+                .map_err(|_| McpError::Protocol(format!("token inválido em {source}")))?;
             value.set_sensitive(true);
             headers.insert(AUTHORIZATION, value);
         }

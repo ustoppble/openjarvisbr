@@ -45,8 +45,10 @@
             width: 100%;
             height: 100%;
             display: flex;
-            align-items: center;
-            justify-content: center;
+            flex-direction: column;
+            align-items: stretch;
+            justify-content: flex-start;
+            gap: 6px;
             visibility: hidden;
             opacity: 0;
             transform: scale(0.9);
@@ -72,7 +74,8 @@
             align-items: center;
             gap: 16px;
             width: 100%;
-            height: 100%;
+            flex: 1 1 auto;
+            min-height: 0;
             padding: 0 22px;
             background: var(--color-bg);
             border: 1px solid rgba(124, 58, 237, 0.25);
@@ -212,6 +215,66 @@
         .line-model.tone-error .label {
             color: var(--color-coral);
         }
+
+        /* Faixa de ferramenta (JRV-58) — src/overlay/tools.ts. A janela cresce
+           52px + gap quando ela aparece (set_overlay_tool_strip). */
+        .tool-strip {
+            display: none;
+            flex: 0 0 52px;
+            align-items: center;
+            gap: 10px;
+            padding: 0 16px;
+            background: var(--color-bg);
+            border: 1px solid rgba(6, 182, 212, 0.35);
+            border-radius: 16px;
+            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+        }
+
+        .overlay-container.tool-active .tool-strip {
+            display: flex;
+        }
+
+        .tool-strip[data-tone="ok"] { border-color: rgba(52, 211, 153, 0.5); }
+        .tool-strip[data-tone="fail"] { border-color: var(--color-coral); }
+
+        .tool-text {
+            flex: 1 1 auto;
+            min-width: 0;
+            font-size: 12px;
+            font-weight: 500;
+            color: var(--color-text);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .tool-strip[data-mode="running"] .tool-text { color: var(--color-text-dim); }
+        .tool-strip[data-tone="ok"] .tool-text { color: #34d399; }
+        .tool-strip[data-tone="fail"] .tool-text { color: var(--color-coral); }
+
+        .tool-strip button {
+            flex: 0 0 auto;
+            pointer-events: auto;
+            font-family: inherit;
+            font-size: 12px;
+            font-weight: 600;
+            padding: 6px 12px;
+            border-radius: 8px;
+            border: 1px solid #2a2a2a;
+            background: #161616;
+            color: var(--color-text);
+            cursor: pointer;
+        }
+
+        .tool-strip button[hidden] { display: none; }
+
+        .tool-strip #tool-confirm {
+            background: var(--color-primary);
+            border-color: var(--color-primary);
+            color: #fff;
+        }
+
+        .tool-strip button:hover { filter: brightness(1.15); }
     </style>
 </head>
 <body>
@@ -237,6 +300,11 @@
                 <div id="user-line" class="line line-user"><span class="label">Você</span><span class="text"></span></div>
                 <div id="model-line" class="line line-model"><span class="label">Jarvis</span><span class="text"></span></div>
             </div>
+        </div>
+        <div id="tool-strip" class="tool-strip" data-mode="idle" aria-live="polite">
+            <span class="tool-text"></span>
+            <button type="button" id="tool-confirm" hidden>Confirmar</button>
+            <button type="button" id="tool-deny" hidden>Negar</button>
         </div>
     </div>
     <script type="module" src="/src/overlay/overlay.ts"></script>

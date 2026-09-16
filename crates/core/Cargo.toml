@@ -9,6 +9,7 @@ base64.workspace = true
 cpal.workspace = true
 futures-util.workspace = true
 hound.workspace = true
+keyring.workspace = true
 reqwest.workspace = true
 ringbuf.workspace = true
 rubato.workspace = true

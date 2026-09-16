@@ -7,6 +7,7 @@
 mod commands;
 mod errors;
 mod tool_events;
+mod tools_config;
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
@@ -24,6 +25,14 @@ use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 use tokio::sync::broadcast;
 
 use commands::settings::{get_settings, list_devices, save_settings, set_fx_amount};
+use commands::permissions::{
+    check_accessibility, get_permissions, open_privacy_pane, request_accessibility,
+    request_permissions, reveal_app,
+};
+use commands::tools::{
+    add_mcp_server, confirm_tool, emit_tool_mock, get_tools_settings, open_tools_link,
+    remove_mcp_server, set_overlay_tool_strip, test_mcp_server,
+};
 use errors::{handle_engine_error, take_pending_error};
 
 const MUTE_SHORTCUT: &str = "CmdOrCtrl+Shift+J";
@@ -39,6 +48,8 @@ pub(crate) struct AppState {
     /// Itens `CheckMenuItem` do submenu "Perfil", por id de perfil — para
     /// marcar o ativo sem reconstruir o menu inteiro a cada troca.
     profile_items: Mutex<Vec<(String, CheckMenuItem<tauri::Wry>)>>,
+    /// Item "Ferramentas: ligadas/desligadas" (JRV-58).
+    tools_item: Mutex<Option<MenuItem<tauri::Wry>>>,
     muted: AtomicBool,
     /// Erro esperando a janela de configurações carregar e consumir via
     /// `take_pending_error` (ver `errors.rs`).
@@ -109,6 +120,39 @@ fn set_mute_label(app: &AppHandle, muted: bool) {
     });
 }
 
+fn tools_label(enabled: bool) -> &'static str {
+    if enabled {
+        "Ferramentas: ligadas"
+    } else {
+        "Ferramentas: desligadas"
+    }
+}
+
+/// Atualiza o texto do item de ferramentas da bandeja — chamado pelo toggle
+/// do próprio menu e depois de salvar a aba Ferramentas.
+pub(crate) fn set_tools_label(app: &AppHandle, enabled: bool) {
+    let handle = app.clone();
+    let _ = app.run_on_main_thread(move || {
+        let state = handle.state::<AppState>();
+        let guard = state.tools_item.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(item) = guard.as_ref() {
+            let _ = item.set_text(tools_label(enabled));
+        }
+    });
+}
+
+/// Liga/desliga `[tools].enabled` pela bandeja e reinicia o motor, que só
+/// lê a seção ao subir.
+fn toggle_tools(app: &AppHandle) {
+    let next = !tools_config::tools_enabled();
+    if let Err(err) = tools_config::set_tools_enabled(next) {
+        tracing::warn!(erro = %err, "não foi possível salvar [tools].enabled");
+        return;
+    }
+    set_tools_label(app, next);
+    tauri::async_runtime::spawn(restart_engine(app.clone()));
+}
+
 fn apply_mute(app: &AppHandle, muted: bool) {
     let state = app.state::<AppState>();
     state.muted.store(muted, Ordering::SeqCst);
@@ -164,7 +208,7 @@ const OVERLAY_HEIGHT_SURREAL: f64 = 220.0;
 const OVERLAY_TOP_MARGIN: f64 = 12.0;
 
 /// Dimensões da janela do overlay pro `overlay_style` atual.
-fn overlay_size() -> (f64, f64) {
+pub(crate) fn overlay_size() -> (f64, f64) {
     match effective_overlay_style(&load_settings()).as_str() {
         "orb" => (OVERLAY_WIDTH_ORB, OVERLAY_HEIGHT_ORB),
         _ => (OVERLAY_WIDTH_SURREAL, OVERLAY_HEIGHT_SURREAL),
@@ -196,7 +240,7 @@ fn overlay_position(app: &AppHandle, width: f64) -> (f64, f64) {
     (x / scale, y / scale)
 }
 
-fn open_overlay_window(app: &AppHandle) {
+pub(crate) fn open_overlay_window(app: &AppHandle) {
     let handle = app.clone();
     let _ = app.run_on_main_thread(move || {
         if handle.get_webview_window("overlay").is_some() {
@@ -210,7 +254,7 @@ fn open_overlay_window(app: &AppHandle) {
         // show() que tornaria a janela key window. `focusable(false)` é a
         // garantia definitiva contra roubo de foco (sobrepõe canBecomeKeyWindow
         // no macOS), independente de qualquer show/hide futuro.
-        let window = WebviewWindowBuilder::new(&handle, "overlay", WebviewUrl::App("overlay/overlay.html".into()))
+        let window = WebviewWindowBuilder::new(&handle, "overlay", WebviewUrl::App("overlay.html".into()))
             .decorations(false)
             .transparent(true)
             .always_on_top(true)
@@ -218,6 +262,9 @@ fn open_overlay_window(app: &AppHandle) {
             .resizable(false)
             .focused(false)
             .focusable(false)
+            // Os botões Confirmar/Negar (JRV-58) precisam do primeiro clique
+            // numa janela que nunca vira key window.
+            .accept_first_mouse(true)
             .visible(true)
             .inner_size(width, height)
             .position(x, y)
@@ -268,6 +315,7 @@ fn handle_menu_event(app: &AppHandle, id: &str) {
     match id {
         "mute" => toggle_mute(app),
         "reconnect" => do_reconnect(app),
+        "tools" => toggle_tools(app),
         "settings" => open_settings_window(app),
         "quit" => app.exit(0),
         _ => {}
@@ -442,6 +490,8 @@ fn main() {
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             open_settings_window(app);
         }))
+        // Arrastar o ícone do app para a lista do painel de Privacidade (JRV-58).
+        .plugin(tauri_plugin_drag::init())
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
                 .with_handler(|app, _shortcut, event| {
@@ -455,6 +505,7 @@ fn main() {
             engine: Mutex::new(None),
             mute_item: Mutex::new(None),
             profile_items: Mutex::new(Vec::new()),
+            tools_item: Mutex::new(None),
             muted: AtomicBool::new(false),
             pending_error: Mutex::new(None),
         })
@@ -466,7 +517,21 @@ fn main() {
             list_devices,
             save_settings,
             set_fx_amount,
-            take_pending_error
+            take_pending_error,
+            confirm_tool,
+            set_overlay_tool_strip,
+            get_tools_settings,
+            add_mcp_server,
+            remove_mcp_server,
+            test_mcp_server,
+            open_tools_link,
+            get_permissions,
+            check_accessibility,
+            request_accessibility,
+            request_permissions,
+            reveal_app,
+            open_privacy_pane,
+            emit_tool_mock
         ])
         .setup(|app| {
             let handle = app.handle().clone();
@@ -498,6 +563,13 @@ fn main() {
                 .collect();
             let profile_submenu = Submenu::with_items(app, "Perfil", true, &profile_refs)?;
 
+            let tools_item = MenuItem::with_id(
+                app,
+                "tools",
+                tools_label(tools_config::tools_enabled()),
+                true,
+                None::<&str>,
+            )?;
             let settings_item = MenuItem::with_id(app, "settings", "Configurações", true, None::<&str>)?;
             let quit_item = MenuItem::with_id(app, "quit", "Sair", true, None::<&str>)?;
             let menu = Menu::with_items(
@@ -505,6 +577,7 @@ fn main() {
                 &[
                     &mute_item,
                     &reconnect_item,
+                    &tools_item,
                     &profile_submenu,
                     &settings_item,
                     &quit_item,
@@ -515,6 +588,7 @@ fn main() {
                 let state = app.state::<AppState>();
                 *state.mute_item.lock().unwrap_or_else(|e| e.into_inner()) = Some(mute_item);
                 *state.profile_items.lock().unwrap_or_else(|e| e.into_inner()) = profile_items;
+                *state.tools_item.lock().unwrap_or_else(|e| e.into_inner()) = Some(tools_item);
             }
 
             let _tray = TrayIconBuilder::with_id(TRAY_ID)
@@ -525,6 +599,22 @@ fn main() {
                 .build(app)?;
 
             app.global_shortcut().register(MUTE_SHORTCUT)?;
+
+            // Dev: OPENJARVISBR_TOOL_MOCK=1 dispara o fluxo falso de ferramenta
+            // (requested → confirm_needed) alguns segundos após abrir, para
+            // validar o overlay sem o Engine emitir eventos de verdade.
+            #[cfg(debug_assertions)]
+            if std::env::var("OPENJARVISBR_TOOL_MOCK").is_ok_and(|v| v == "1") {
+                let mock_handle = handle.clone();
+                tauri::async_runtime::spawn(async move {
+                    tokio::time::sleep(std::time::Duration::from_secs(4)).await;
+                    open_overlay_window(&mock_handle);
+                    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                    if let Err(err) = commands::tools::run_tool_mock(&mock_handle, None) {
+                        tracing::warn!(erro = %err, "mock de ferramenta falhou");
+                    }
+                });
+            }
 
             spawn_startup(handle);
 
