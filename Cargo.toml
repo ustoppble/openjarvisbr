@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/core", "crates/cli"]
+members = ["crates/core", "crates/cli", "apps/desktop/src-tauri"]
 
 [workspace.dependencies]
 base64 = "0.22.1"

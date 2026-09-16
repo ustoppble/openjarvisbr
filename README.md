@@ -54,6 +54,26 @@ Flags: `--voice`, `--device-in`, `--device-out`, `--debug`.
 Antes de testar de verdade, siga o roteiro leigo em [`docs/testes/v1.md`](docs/testes/v1.md) —
 ele cobre desde criar a chave até conversa de 2 minutos, interrupção, mudo e reconexão de rede.
 
+## Rodar o desktop (Tauri)
+
+`apps/desktop` é o app Mac/Windows: fica na bandeja, sem terminal. Ainda sem overlay nem
+janela de configurações de verdade (JRV-32 e JRV-33) — nesta entrega só sobe o motor e
+mostra o estado na bandeja.
+
+```sh
+. "$HOME/.cargo/env"
+cd apps/desktop
+npm install
+npm run tauri dev
+```
+
+- Com a chave configurada (`~/.config/jarvis/config.toml` ou `GEMINI_API_KEY`): conecta
+  direto e o ícone da bandeja mostra o estado (conectando, ouvindo, falando, mudo, erro).
+- Sem chave: abre uma janela vazia dizendo pra configurar `~/.config/jarvis/config.toml` e
+  o ícone fica em erro.
+- Atalho global `Cmd+Shift+J` (`Ctrl+Shift+J` no Windows/Linux) muta e desmuta.
+- Menu do ícone: Mutar/Desmutar, Reconectar, Configurações, Sair.
+
 ## Stack
 
 Rust stable · [cpal](https://github.com/RustAudio/cpal) · [rubato](https://github.com/HEnquist/rubato) ·
