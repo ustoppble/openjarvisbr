@@ -5,3 +5,4 @@ pub mod audio;
 pub mod config;
 pub mod engine;
 pub mod live;
+pub mod tools;

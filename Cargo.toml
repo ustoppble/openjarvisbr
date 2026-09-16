@@ -3,6 +3,7 @@ resolver = "2"
 members = ["crates/core", "crates/cli", "apps/desktop/src-tauri"]
 
 [workspace.dependencies]
+async-trait = "0.1"
 base64 = "0.22.1"
 clap = { version = "4.6.7", features = ["derive"] }
 colored = "3.1.1"
