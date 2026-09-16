@@ -7,7 +7,7 @@ mod live;
 
 use clap::Parser;
 
-use app::App;
+use app::{App, AppConfig};
 
 /// Assistente de voz OpenJarvisBR — conversa contínua com o gemini-3.8-live.
 #[derive(Parser, Debug)]
@@ -49,8 +49,22 @@ fn main() {
         "flags carregadas"
     );
 
-    let mut app = App::new();
-    app.run(api_key.len());
+    let runtime = match tokio::runtime::Runtime::new() {
+        Ok(runtime) => runtime,
+        Err(err) => {
+            eprintln!("não foi possível iniciar o runtime assíncrono: {err}");
+            std::process::exit(4);
+        }
+    };
+
+    let mut app = App::new(AppConfig {
+        api_key,
+        voice: cli.voice,
+        device_in: cli.device_in,
+        device_out: cli.device_out,
+    });
+    let exit_code = runtime.block_on(app.run());
+    std::process::exit(exit_code);
 }
 
 fn init_tracing(debug: bool) {
