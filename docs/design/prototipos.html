@@ -1,0 +1,816 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OpenJarvisBR v2 — Protótipos de Design | 7 Direções</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
+            background: #f5f5f5;
+            padding: 20px;
+            line-height: 1.6;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+
+        h1 {
+            text-align: center;
+            margin-bottom: 10px;
+            font-size: 28px;
+            color: #333;
+        }
+
+        .subtitle {
+            text-align: center;
+            color: #666;
+            margin-bottom: 30px;
+            font-size: 14px;
+        }
+
+        .controls {
+            display: flex;
+            justify-content: center;
+            gap: 10px;
+            margin-bottom: 30px;
+            flex-wrap: wrap;
+        }
+
+        button {
+            padding: 10px 20px;
+            border: none;
+            border-radius: 6px;
+            background: #0066cc;
+            color: white;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 500;
+            transition: background 0.2s;
+        }
+
+        button:hover {
+            background: #0052a3;
+        }
+
+        button.listening {
+            background: #00b050;
+        }
+
+        button.listening:hover {
+            background: #008c3a;
+        }
+
+        button.speaking {
+            background: #ff6b35;
+        }
+
+        button.speaking:hover {
+            background: #cc5628;
+        }
+
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(480px, 1fr));
+            gap: 20px;
+            margin-bottom: 40px;
+        }
+
+        .design-card {
+            background: white;
+            border-radius: 8px;
+            overflow: hidden;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+            transition: box-shadow 0.3s;
+        }
+
+        .design-card:hover {
+            box-shadow: 0 4px 16px rgba(0,0,0,0.15);
+        }
+
+        .design-header {
+            padding: 20px;
+            border-bottom: 1px solid #eee;
+        }
+
+        .design-name {
+            font-size: 18px;
+            font-weight: 600;
+            margin-bottom: 8px;
+            color: #333;
+        }
+
+        .design-info {
+            font-size: 13px;
+            color: #666;
+            margin-bottom: 6px;
+        }
+
+        .design-preview {
+            padding: 40px 20px;
+            min-height: 200px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: linear-gradient(135deg, #f9f9f9 0%, #fafafa 100%);
+            position: relative;
+            overflow: hidden;
+        }
+
+        /* Siri Minimalist Pill */
+        .preview-siri {
+            background: linear-gradient(135deg, #0a0e27 0%, #1a1a2e 100%);
+        }
+
+        .siri-container {
+            width: 360px;
+            height: 100px;
+            background: rgba(10, 14, 39, 0.8);
+            border: 1px solid #1a237e;
+            border-radius: 20px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            padding: 0 20px;
+            backdrop-filter: blur(8px);
+        }
+
+        .siri-bar {
+            width: 4px;
+            height: 30px;
+            background: #64b5f6;
+            border-radius: 2px;
+            animation: waveBar 0.6s ease-in-out infinite;
+        }
+
+        .siri-bar:nth-child(2) {
+            animation-delay: -0.1s;
+        }
+
+        .siri-bar:nth-child(3) {
+            animation-delay: -0.2s;
+        }
+
+        .siri-bar:nth-child(4) {
+            animation-delay: -0.3s;
+        }
+
+        .siri-bar:nth-child(5) {
+            animation-delay: -0.4s;
+        }
+
+        @keyframes waveBar {
+            0%, 100% { height: 30px; }
+            50% { height: 60px; }
+        }
+
+        /* Raycast Dark Cockpit */
+        .preview-raycast {
+            background: linear-gradient(135deg, #0c0c0c 0%, #1a1a1a 100%);
+        }
+
+        .raycast-container {
+            width: 360px;
+            height: 100px;
+            background: rgba(26, 26, 26, 0.7);
+            border: 1px solid #363739;
+            border-radius: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 12px;
+            padding: 20px;
+            backdrop-filter: blur(12px);
+        }
+
+        .raycast-dot {
+            width: 12px;
+            height: 12px;
+            background: #ff6363;
+            border-radius: 50%;
+            animation: pulse 1s ease-in-out infinite;
+        }
+
+        .raycast-dot:nth-child(2) { animation-delay: 0.1s; }
+        .raycast-dot:nth-child(3) { animation-delay: 0.2s; }
+        .raycast-dot:nth-child(4) { animation-delay: 0.3s; }
+        .raycast-dot:nth-child(5) { animation-delay: 0.4s; }
+
+        @keyframes pulse {
+            0%, 100% { transform: scale(0.8); opacity: 0.5; }
+            50% { transform: scale(1.2); opacity: 1; }
+        }
+
+        /* ChatGPT Floating */
+        .preview-chatgpt {
+            background: linear-gradient(135deg, #ffffff 0%, #f9f9f9 100%);
+        }
+
+        .chatgpt-container {
+            width: 360px;
+            height: 100px;
+            background: rgba(255, 255, 255, 0.95);
+            border: 1px solid #e0e0e0;
+            border-radius: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 6px;
+            box-shadow: 0 4px 12px rgba(16, 163, 127, 0.15);
+        }
+
+        .chatgpt-dot {
+            width: 10px;
+            height: 10px;
+            background: #10a37f;
+            border-radius: 50%;
+            animation: breathe 1.2s ease-in-out infinite;
+        }
+
+        .chatgpt-dot:nth-child(2) { animation-delay: 0.2s; }
+        .chatgpt-dot:nth-child(3) { animation-delay: 0.4s; }
+
+        @keyframes breathe {
+            0%, 100% { transform: scale(0.6); }
+            50% { transform: scale(1); }
+        }
+
+        /* Perplexity Voice Orb */
+        .preview-perplexity {
+            background: linear-gradient(135deg, #1a1a1a 0%, #0c0c0c 100%);
+        }
+
+        .perplexity-container {
+            width: 360px;
+            height: 120px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .perplexity-orb {
+            width: 100px;
+            height: 100px;
+            position: relative;
+        }
+
+        .orb-dot {
+            position: absolute;
+            width: 8px;
+            height: 8px;
+            background: #6b5ff0;
+            border-radius: 50%;
+            box-shadow: 0 0 10px rgba(107, 95, 240, 0.6);
+        }
+
+        .orb-center {
+            position: absolute;
+            width: 20px;
+            height: 20px;
+            background: #6b5ff0;
+            border-radius: 50%;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            box-shadow: 0 0 20px #6b5ff0;
+            animation: pulse-center 1.5s ease-in-out infinite;
+        }
+
+        @keyframes pulse-center {
+            0%, 100% { transform: translate(-50%, -50%) scale(1); }
+            50% { transform: translate(-50%, -50%) scale(1.2); }
+        }
+
+        /* JARVIS HUD */
+        .preview-jarvis {
+            background: linear-gradient(135deg, #0a0a0a 0%, #1a1515 100%);
+        }
+
+        .jarvis-container {
+            width: 360px;
+            height: 100px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 12px;
+        }
+
+        .jarvis-reactor {
+            width: 40px;
+            height: 40px;
+            background: radial-gradient(circle, #ff6b35 0%, #ff6b35 30%, transparent 70%);
+            border-radius: 50%;
+            box-shadow: 0 0 20px #ff6b35, inset 0 0 20px rgba(255, 107, 53, 0.5);
+            animation: reactor-pulse 1s ease-in-out infinite;
+        }
+
+        @keyframes reactor-pulse {
+            0%, 100% { transform: scale(1); }
+            50% { transform: scale(1.15); }
+        }
+
+        .jarvis-bars {
+            display: flex;
+            gap: 4px;
+        }
+
+        .jarvis-bar {
+            width: 3px;
+            height: 20px;
+            background: #ff6b35;
+            border-radius: 1px;
+            animation: jarvis-wave 0.8s ease-in-out infinite;
+        }
+
+        .jarvis-bar:nth-child(2) { animation-delay: -0.2s; }
+        .jarvis-bar:nth-child(3) { animation-delay: -0.4s; }
+        .jarvis-bar:nth-child(4) { animation-delay: -0.6s; }
+
+        @keyframes jarvis-wave {
+            0%, 100% { height: 20px; }
+            50% { height: 40px; }
+        }
+
+        /* Glassmorphism */
+        .preview-glass {
+            background: linear-gradient(135deg, #0c0c1e 0%, #1a1a2e 100%);
+        }
+
+        .glass-container {
+            width: 360px;
+            height: 100px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            position: relative;
+        }
+
+        .glass-wave-container {
+            width: 280px;
+            height: 60px;
+            background: rgba(50, 50, 70, 0.2);
+            border: 1px solid rgba(100, 150, 200, 0.3);
+            border-radius: 30px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            backdrop-filter: blur(16px);
+            position: relative;
+            overflow: hidden;
+        }
+
+        .wave {
+            position: absolute;
+            width: 100%;
+            height: 100%;
+            opacity: 0.6;
+        }
+
+        .wave-path {
+            fill: none;
+            stroke: #7c3aed;
+            stroke-width: 2;
+            stroke-linecap: round;
+        }
+
+        /* Minimal Mono */
+        .preview-minimal {
+            background: linear-gradient(135deg, #000000 0%, #0a0a0a 100%);
+        }
+
+        .minimal-container {
+            width: 360px;
+            height: 100px;
+            font-family: 'Courier New', monospace;
+            color: #ffffff;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 12px;
+            font-size: 18px;
+            letter-spacing: 2px;
+        }
+
+        .minimal-bar {
+            width: 200px;
+            height: 12px;
+            border: 1px solid #ffffff;
+            border-radius: 2px;
+            display: flex;
+            overflow: hidden;
+        }
+
+        .minimal-fill {
+            height: 100%;
+            background: #ffffff;
+            animation: minimal-fill 1.5s ease-in-out infinite;
+        }
+
+        @keyframes minimal-fill {
+            0% { width: 20%; }
+            50% { width: 80%; }
+            100% { width: 20%; }
+        }
+
+        /* Recommendation Card */
+        .recommendation {
+            background: white;
+            border-radius: 8px;
+            padding: 30px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+            border-left: 4px solid #0066cc;
+        }
+
+        .recommendation h2 {
+            margin-bottom: 20px;
+            color: #333;
+            font-size: 22px;
+        }
+
+        .rec-item {
+            margin-bottom: 15px;
+            padding-left: 20px;
+            border-left: 2px solid #0066cc;
+        }
+
+        .rec-item strong {
+            color: #0066cc;
+        }
+
+        .rec-item p {
+            color: #555;
+            font-size: 14px;
+            margin-top: 5px;
+        }
+
+        .palette {
+            display: flex;
+            gap: 10px;
+            margin-top: 10px;
+            flex-wrap: wrap;
+        }
+
+        .color-box {
+            width: 40px;
+            height: 40px;
+            border-radius: 4px;
+            border: 1px solid #ddd;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 10px;
+            color: white;
+            text-shadow: 0 1px 2px rgba(0,0,0,0.3);
+            cursor: pointer;
+            position: relative;
+        }
+
+        .color-box:hover::after {
+            content: attr(data-hex);
+            position: absolute;
+            background: #333;
+            color: white;
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 11px;
+            white-space: nowrap;
+            bottom: -30px;
+            left: 50%;
+            transform: translateX(-50%);
+        }
+
+        .state-indicator {
+            text-align: center;
+            font-size: 12px;
+            color: #666;
+            margin-top: 10px;
+            font-style: italic;
+        }
+
+        footer {
+            text-align: center;
+            margin-top: 40px;
+            padding-top: 20px;
+            border-top: 1px solid #ddd;
+            color: #666;
+            font-size: 12px;
+        }
+
+        .inactive {
+            opacity: 0.4;
+            animation: none !important;
+        }
+
+        .inactive * {
+            animation: none !important;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>OpenJarvisBR v2 — Protótipos de Design</h1>
+        <p class="subtitle">7 Direções Visuais para o Overlay Flutuante (420×140px)</p>
+
+        <div class="controls">
+            <button onclick="setMode('standby')">🔇 Standby</button>
+            <button class="listening" onclick="setMode('listening')">🎤 Escutando</button>
+            <button class="speaking" onclick="setMode('speaking')">💬 Falando</button>
+            <button onclick="toggleAll()">⏸ Pausar/Resumir</button>
+        </div>
+
+        <div class="grid">
+            <!-- Siri -->
+            <div class="design-card">
+                <div class="design-header">
+                    <div class="design-name">1. Siri Minimalist Pill</div>
+                    <div class="design-info">Inspiração: macOS 27 Apple Siri</div>
+                    <div class="design-info">Paleta: Blue (#64b5f6) + Dark Navy</div>
+                </div>
+                <div class="design-preview preview-siri">
+                    <div class="siri-container" id="siri-demo">
+                        <div class="siri-bar"></div>
+                        <div class="siri-bar"></div>
+                        <div class="siri-bar"></div>
+                        <div class="siri-bar"></div>
+                        <div class="siri-bar"></div>
+                    </div>
+                </div>
+                <div class="state-indicator">Waveform bars reagem em tempo real</div>
+            </div>
+
+            <!-- Raycast -->
+            <div class="design-card">
+                <div class="design-header">
+                    <div class="design-name">2. Raycast Dark Cockpit</div>
+                    <div class="design-info">Inspiração: Raycast Pro Design</div>
+                    <div class="design-info">Paleta: Coral (#ff6363) + Deep Black</div>
+                </div>
+                <div class="design-preview preview-raycast">
+                    <div class="raycast-container" id="raycast-demo">
+                        <div class="raycast-dot"></div>
+                        <div class="raycast-dot"></div>
+                        <div class="raycast-dot"></div>
+                        <div class="raycast-dot"></div>
+                        <div class="raycast-dot"></div>
+                    </div>
+                </div>
+                <div class="state-indicator">Dots pulsam em cascata</div>
+            </div>
+
+            <!-- ChatGPT -->
+            <div class="design-card">
+                <div class="design-header">
+                    <div class="design-name">3. ChatGPT Floating Overlay</div>
+                    <div class="design-info">Inspiração: OpenAI ChatGPT Desktop</div>
+                    <div class="design-info">Paleta: Teal (#10a37f) + White</div>
+                </div>
+                <div class="design-preview preview-chatgpt">
+                    <div class="chatgpt-container" id="chatgpt-demo">
+                        <div class="chatgpt-dot"></div>
+                        <div class="chatgpt-dot"></div>
+                        <div class="chatgpt-dot"></div>
+                    </div>
+                </div>
+                <div class="state-indicator">Três pontos respiram</div>
+            </div>
+
+            <!-- Perplexity -->
+            <div class="design-card">
+                <div class="design-header">
+                    <div class="design-name">4. Perplexity Voice Orb</div>
+                    <div class="design-info">Inspiração: Perplexity Pro Voice Mode</div>
+                    <div class="design-info">Paleta: Purple (#6b5ff0) + Cyan</div>
+                </div>
+                <div class="design-preview preview-perplexity">
+                    <div class="perplexity-container" id="perplexity-demo">
+                        <svg class="perplexity-orb" viewBox="0 0 100 100">
+                            <circle cx="50" cy="50" r="30" fill="none" stroke="#6b5ff0" stroke-width="1" opacity="0.3" />
+                            <g id="orb-dots"></g>
+                        </svg>
+                        <div class="orb-center"></div>
+                    </div>
+                </div>
+                <div class="state-indicator">Orb com 7 dots + núcleo central</div>
+            </div>
+
+            <!-- JARVIS -->
+            <div class="design-card">
+                <div class="design-header">
+                    <div class="design-name">5. JARVIS Holographic HUD</div>
+                    <div class="design-info">Inspiração: Iron Man JARVIS Interface</div>
+                    <div class="design-info">Paleta: Orange (#ff6b35) + Gold</div>
+                </div>
+                <div class="design-preview preview-jarvis">
+                    <div class="jarvis-container" id="jarvis-demo">
+                        <div class="jarvis-reactor"></div>
+                        <div class="jarvis-bars">
+                            <div class="jarvis-bar"></div>
+                            <div class="jarvis-bar"></div>
+                            <div class="jarvis-bar"></div>
+                            <div class="jarvis-bar"></div>
+                        </div>
+                    </div>
+                </div>
+                <div class="state-indicator">Arc Reactor pulsante + waveform bars</div>
+            </div>
+
+            <!-- Glassmorphism -->
+            <div class="design-card">
+                <div class="design-header">
+                    <div class="design-name">6. Glassmorphism Voice Wave</div>
+                    <div class="design-info">Inspiração: Glassmorphism + Voice UI</div>
+                    <div class="design-info">Paleta: Purple (#7c3aed) + Cyan</div>
+                </div>
+                <div class="design-preview preview-glass">
+                    <div class="glass-container" id="glass-demo">
+                        <div class="glass-wave-container">
+                            <svg width="100%" height="100%" viewBox="0 0 280 60" preserveAspectRatio="none">
+                                <path class="wave-path" d="M0,30 Q70,10 140,30 T280,30" stroke="#7c3aed" />
+                                <path class="wave-path" d="M0,30 Q70,50 140,30 T280,30" stroke="#06b6d4" opacity="0.7" style="animation: wave-shift 3s ease-in-out infinite; animation-delay: 0.2s;" />
+                            </svg>
+                        </div>
+                    </div>
+                </div>
+                <div class="state-indicator">Ondas suaves com glassmorphism</div>
+            </div>
+
+            <!-- Minimal -->
+            <div class="design-card">
+                <div class="design-header">
+                    <div class="design-name">7. Minimal Mono Listener</div>
+                    <div class="design-info">Inspiração: Extreme Minimalism</div>
+                    <div class="design-info">Paleta: Pure Black + White</div>
+                </div>
+                <div class="design-preview preview-minimal">
+                    <div class="minimal-container" id="minimal-demo">
+                        <div style="font-size: 20px;">◐ ◑ ◕ ◑ ◐</div>
+                        <div class="minimal-bar">
+                            <div class="minimal-fill"></div>
+                        </div>
+                    </div>
+                </div>
+                <div class="state-indicator">Símbolo + barra ASCII</div>
+            </div>
+        </div>
+
+        <!-- Recomendação -->
+        <div class="recommendation">
+            <h2>✨ Recomendação Final</h2>
+
+            <div class="rec-item">
+                <strong>Direção Escolhida:</strong>
+                <p>Perplexity Voice Orb + Raycast Dark Cockpit (Fusão)</p>
+            </div>
+
+            <div class="rec-item">
+                <strong>Paleta Final (hex):</strong>
+                <div class="palette">
+                    <div class="color-box" style="background: #0c0c0c; border: 1px solid #666;" data-hex="#0c0c0c">BG</div>
+                    <div class="color-box" style="background: #7c3aed;" data-hex="#7c3aed">ORB</div>
+                    <div class="color-box" style="background: #06b6d4;" data-hex="#06b6d4">ACC</div>
+                    <div class="color-box" style="background: #ff6363;" data-hex="#ff6363">MUTE</div>
+                    <div class="color-box" style="background: #e0e0e0; color: #000;" data-hex="#e0e0e0">TEXT</div>
+                </div>
+            </div>
+
+            <div class="rec-item">
+                <strong>Por que funciona:</strong>
+                <ul style="margin-top: 8px; margin-left: 20px; color: #555; font-size: 14px;">
+                    <li>✅ Legível em live streaming (contraste alto)</li>
+                    <li>✅ Diferenciado vs Siri/ChatGPT (purple + cyan)</li>
+                    <li>✅ Escalável para 420×140px (dots escalam bem)</li>
+                    <li>✅ Movimento atrai atenção sem ser distrator</li>
+                    <li>✅ "Power tool" + personalidade</li>
+                    <li>✅ Pronto para implementar em SVG/Canvas/CSS</li>
+                </ul>
+            </div>
+
+            <div class="rec-item">
+                <strong>Próximos Passos:</strong>
+                <p>1. Escolher entre as 7 direções acima<br>2. Prototipar com CSS/SVG animado<br>3. Testar readability em live<br>4. Integrar no Tauri (JRV-29 em diante)</p>
+            </div>
+        </div>
+    </div>
+
+    <footer>
+        <p>OpenJarvisBR v2 — Design Exploration | Clique nos botões de controle para simular estados diferentes</p>
+        <p style="margin-top: 10px;">Use em navegador moderno (Chrome, Safari, Firefox) para melhor performance das animações</p>
+    </footer>
+
+    <script>
+        let currentMode = 'listening';
+        let isAnimating = true;
+
+        function setMode(mode) {
+            currentMode = mode;
+            updateMode();
+        }
+
+        function updateMode() {
+            const containers = document.querySelectorAll('[id$="-demo"]');
+            containers.forEach(container => {
+                container.classList.remove('inactive');
+
+                if (currentMode === 'standby') {
+                    container.style.opacity = '0.3';
+                } else if (currentMode === 'speaking') {
+                    container.style.opacity = '1';
+                    // Aumentar velocidade de animação
+                    const elements = container.querySelectorAll('[style*="animation"]');
+                    elements.forEach(el => {
+                        if (el.style.animation) {
+                            el.style.animation = el.style.animation.replace(/[\d.]+s/, '0.4s');
+                        }
+                    });
+                } else {
+                    container.style.opacity = '1';
+                    // Velocidade normal
+                    const elements = container.querySelectorAll('[style*="animation"]');
+                    elements.forEach(el => {
+                        el.style.animation = '';
+                    });
+                }
+            });
+        }
+
+        function toggleAll() {
+            isAnimating = !isAnimating;
+            const containers = document.querySelectorAll('[id$="-demo"]');
+            containers.forEach(container => {
+                if (isAnimating) {
+                    container.classList.remove('inactive');
+                } else {
+                    container.classList.add('inactive');
+                }
+            });
+        }
+
+        // Inicializar orb com dots
+        function initPerplexityOrb() {
+            const orbGroup = document.getElementById('orb-dots');
+            const dotPositions = [
+                { x: 50, y: 10 },
+                { x: 72, y: 20 },
+                { x: 78, y: 45 },
+                { x: 72, y: 70 },
+                { x: 50, y: 80 },
+                { x: 28, y: 70 },
+                { x: 22, y: 45 }
+            ];
+
+            dotPositions.forEach((pos, idx) => {
+                const dot = document.createElement('circle');
+                dot.setAttribute('cx', pos.x);
+                dot.setAttribute('cy', pos.y);
+                dot.setAttribute('r', '4');
+                dot.setAttribute('fill', '#6b5ff0');
+                dot.setAttribute('box-shadow', '0 0 10px rgba(107, 95, 240, 0.6)');
+                dot.style.animation = `pulse 1s ease-in-out infinite`;
+                dot.style.animationDelay = `${idx * 0.15}s`;
+                orbGroup.appendChild(dot);
+            });
+        }
+
+        // CSS para orb animation
+        const style = document.createElement('style');
+        style.textContent = `
+            circle {
+                animation: orb-pulse 1s ease-in-out infinite;
+            }
+            circle:nth-child(1) { animation-delay: 0s; }
+            circle:nth-child(2) { animation-delay: 0.15s; }
+            circle:nth-child(3) { animation-delay: 0.3s; }
+            circle:nth-child(4) { animation-delay: 0.45s; }
+            circle:nth-child(5) { animation-delay: 0.6s; }
+            circle:nth-child(6) { animation-delay: 0.75s; }
+            circle:nth-child(7) { animation-delay: 0.9s; }
+
+            @keyframes orb-pulse {
+                0%, 100% { r: 4; opacity: 0.5; }
+                50% { r: 6; opacity: 1; }
+            }
+
+            @keyframes wave-shift {
+                0% { transform: translateX(0); }
+                100% { transform: translateX(280px); }
+            }
+        `;
+        document.head.appendChild(style);
+
+        // Initialize
+        initPerplexityOrb();
+        updateMode();
+    </script>
+</body>
+</html>
