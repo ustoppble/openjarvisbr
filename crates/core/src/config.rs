@@ -26,14 +26,34 @@ struct FileConfig {
     voice_fx: Option<String>,
     /// Intensidade do efeito, 0.0 a 1.0 (padrão 0.35).
     voice_fx_amount: Option<f32>,
+    /// Como a pessoa quer ser chamada. Ausente = o Jarvis ainda não sabe o
+    /// nome e pergunta na primeira conversa.
+    user_name: Option<String>,
 }
 
-/// Identidade padrão da OpenJarvisBR. Pode ser trocada por `system_prompt`
-/// no config.toml.
-pub const DEFAULT_SYSTEM_PROMPT: &str = "\
-Você é a OpenJarvisBR, assistente de voz pessoal do Guilherme Laschuk, \
-criada em Rust com o Gemini Live. Chame-o sempre de Laschuk. Quando perguntarem quem você é, diga que é a \
-OpenJarvisBR, o Jarvis dele, e nunca se descreva como 'modelo de linguagem'.\n\
+/// Marcador substituído pelo nome (ou por "você", sem nome) num
+/// `system_prompt` customizado do config.toml.
+const NAME_PLACEHOLDER: &str = "{nome}";
+
+/// Identidade padrão da OpenJarvisBR, personalizada com o nome salvo em
+/// `config.toml` (`user_name`). Sem nome, o Jarvis não inventa: trata a
+/// pessoa por "você" e pergunta o nome na primeira conversa. Pode ser
+/// trocada por `system_prompt` no config.toml.
+pub fn default_system_prompt(user_name: Option<&str>) -> String {
+    let user_name = user_name.filter(|n| !n.trim().is_empty());
+    let identity = match user_name {
+        Some(name) => format!(
+            "assistente de voz pessoal de {name}, \
+criada em Rust com o Gemini Live. Chame-o(a) sempre de {name}."
+        ),
+        None => "assistente de voz pessoal, criada em Rust com o Gemini Live. \
+Você ainda não sabe o nome da pessoa: na primeira conversa, pergunte como ela \
+quer ser chamada e passe a usar esse nome; até lá use 'você'."
+            .to_string(),
+    };
+    format!(
+        "Você é a OpenJarvisBR, {identity} Quando perguntarem quem você é, diga que é a \
+OpenJarvisBR, o Jarvis, e nunca se descreva como 'modelo de linguagem'.\n\
 \n\
 Idioma: fale SEMPRE em português do Brasil, natural e direto, como numa conversa \
 entre amigos. Só use outra língua quando ele pedir explicitamente e, mesmo assim, \
@@ -52,7 +72,27 @@ melancólico, não mude a emoção entre uma frase e outra.\n\
 Memória: preste atenção ao que ele diz ao longo da conversa e retome quando fizer \
 sentido (nomes, metas, decisões). Ele está fazendo uma live enquanto fala com você: \
 às vezes se dirige à audiência ('gurizada'); nesses momentos, não interrompa e \
-não responda como se fosse para você, a menos que ele te chame.";
+não responda como se fosse para você, a menos que ele te chame."
+    )
+}
+
+/// Aplica o nome salvo (ou "você", sem nome) num `system_prompt` próprio do
+/// usuário, substituindo a marcação `{nome}` quando ela existir. Sem
+/// marcação, o texto volta inalterado.
+pub fn apply_user_name(prompt: &str, user_name: Option<&str>) -> String {
+    let name = user_name.filter(|n| !n.trim().is_empty()).unwrap_or("você");
+    prompt.replace(NAME_PLACEHOLDER, name)
+}
+
+/// System prompt efetivo: o `system_prompt` customizado (com `{nome}`
+/// substituído) quando existir, senão o padrão personalizado com
+/// `user_name`.
+pub fn effective_system_prompt(settings: &Settings) -> String {
+    match &settings.system_prompt {
+        Some(custom) => apply_user_name(custom, settings.user_name.as_deref()),
+        None => default_system_prompt(settings.user_name.as_deref()),
+    }
+}
 
 /// Configuração efetiva depois de juntar config.toml e flags.
 #[derive(Debug, Clone, Default)]
@@ -64,6 +104,7 @@ pub struct Settings {
     pub barge_in: Option<bool>,
     pub voice_fx: Option<String>,
     pub voice_fx_amount: Option<f32>,
+    pub user_name: Option<String>,
 }
 
 impl FileConfig {
@@ -86,6 +127,7 @@ struct FileConfigOut {
     barge_in: Option<bool>,
     voice_fx: Option<String>,
     voice_fx_amount: Option<f32>,
+    user_name: Option<String>,
 }
 
 /// Campos que a janela de configurações grava. `api_key` só vem preenchido
@@ -100,6 +142,7 @@ pub struct SaveSettings {
     pub device_out: Option<String>,
     pub barge_in: Option<bool>,
     pub voice_fx_amount: Option<f32>,
+    pub user_name: Option<String>,
 }
 
 #[derive(Debug)]
@@ -171,6 +214,7 @@ pub fn load_settings() -> Settings {
         barge_in: parsed.barge_in,
         voice_fx: parsed.voice_fx.filter(|s| !s.trim().is_empty()),
         voice_fx_amount: parsed.voice_fx_amount,
+        user_name: parsed.user_name.filter(|s| !s.trim().is_empty()),
     }
 }
 
@@ -227,6 +271,7 @@ pub fn save(update: SaveSettings) -> Result<(), ConfigError> {
         barge_in: update.barge_in,
         voice_fx: existing.voice_fx,
         voice_fx_amount: update.voice_fx_amount,
+        user_name: update.user_name.filter(|s| !s.trim().is_empty()),
     };
 
     let toml_str = toml::to_string_pretty(&out).map_err(ConfigError::SerializeFile)?;
@@ -337,6 +382,48 @@ mod tests {
         assert_eq!(settings.system_prompt.as_deref(), Some("seja breve"));
 
         drop(home);
+    }
+
+    #[test]
+    fn default_prompt_with_name_addresses_the_person_by_name() {
+        let prompt = default_system_prompt(Some("Maria"));
+        assert!(prompt.contains("assistente de voz pessoal de Maria"));
+        assert!(prompt.contains("Chame-o(a) sempre de Maria"));
+        assert!(!prompt.to_lowercase().contains("laschuk"));
+    }
+
+    #[test]
+    fn default_prompt_without_name_asks_how_to_be_called() {
+        let prompt = default_system_prompt(None);
+        assert!(prompt.contains("Você ainda não sabe o nome da pessoa"));
+        assert!(prompt.contains("use 'você'"));
+        assert!(!prompt.contains("Maria"));
+        assert!(!prompt.to_lowercase().contains("laschuk"));
+    }
+
+    #[test]
+    fn apply_user_name_replaces_placeholder_or_falls_back_to_voce() {
+        assert_eq!(
+            apply_user_name("Olá, {nome}!", Some("Maria")),
+            "Olá, Maria!"
+        );
+        assert_eq!(apply_user_name("Olá, {nome}!", None), "Olá, você!");
+        assert_eq!(apply_user_name("sem marcação", Some("Maria")), "sem marcação");
+    }
+
+    #[test]
+    fn effective_system_prompt_prefers_custom_prompt_over_default() {
+        let mut settings = Settings {
+            user_name: Some("Maria".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(
+            effective_system_prompt(&settings),
+            default_system_prompt(Some("Maria"))
+        );
+
+        settings.system_prompt = Some("Fale com {nome}.".to_string());
+        assert_eq!(effective_system_prompt(&settings), "Fale com Maria.");
     }
 
     #[test]

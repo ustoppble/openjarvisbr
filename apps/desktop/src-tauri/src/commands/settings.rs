@@ -4,7 +4,7 @@
 
 use openjarvisbr_core::audio::{capture::list_input_devices, playback::list_output_devices};
 use openjarvisbr_core::config::{
-    load_api_key, load_settings, save, SaveSettings, DEFAULT_SYSTEM_PROMPT,
+    default_system_prompt, load_api_key, load_settings, save, SaveSettings,
 };
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager};
@@ -22,6 +22,7 @@ pub struct SettingsPayload {
     pub voice_fx_amount: f32,
     pub system_prompt: String,
     pub default_system_prompt: String,
+    pub user_name: String,
 }
 
 /// Estado atual do config.toml, pronto para preencher o formulário. A chave
@@ -41,8 +42,10 @@ pub fn get_settings() -> SettingsPayload {
         voice_fx_amount: settings.voice_fx_amount.unwrap_or(0.35),
         system_prompt: settings
             .system_prompt
-            .unwrap_or_else(|| DEFAULT_SYSTEM_PROMPT.to_string()),
-        default_system_prompt: DEFAULT_SYSTEM_PROMPT.to_string(),
+            .clone()
+            .unwrap_or_else(|| default_system_prompt(settings.user_name.as_deref())),
+        default_system_prompt: default_system_prompt(settings.user_name.as_deref()),
+        user_name: settings.user_name.clone().unwrap_or_default(),
     }
 }
 
@@ -72,6 +75,7 @@ pub struct SaveSettingsPayload {
     pub barge_in: bool,
     pub voice_fx_amount: f32,
     pub system_prompt: String,
+    pub user_name: String,
 }
 
 /// Ajusta a intensidade do efeito de voz na sessão em andamento, sem
@@ -92,15 +96,17 @@ pub fn set_fx_amount(app: AppHandle, amount: f32) {
 #[tauri::command]
 pub async fn save_settings(app: AppHandle, payload: SaveSettingsPayload) -> Result<(), String> {
     let before = load_settings();
+    let before_user_name = before.user_name.clone().unwrap_or_default();
     let needs_restart = before.voice.as_deref().unwrap_or("Puck") != payload.voice
         || before.device_in.as_deref() != payload.device_in.as_deref()
         || before.device_out.as_deref() != payload.device_out.as_deref()
         || before.barge_in.unwrap_or(false) != payload.barge_in
         || before
             .system_prompt
-            .as_deref()
-            .unwrap_or(DEFAULT_SYSTEM_PROMPT)
-            != payload.system_prompt;
+            .clone()
+            .unwrap_or_else(|| default_system_prompt(before.user_name.as_deref()))
+            != payload.system_prompt
+        || before_user_name != payload.user_name;
 
     save(SaveSettings {
         api_key: payload.api_key.clone(),
@@ -110,6 +116,7 @@ pub async fn save_settings(app: AppHandle, payload: SaveSettingsPayload) -> Resu
         device_out: payload.device_out.clone(),
         barge_in: Some(payload.barge_in),
         voice_fx_amount: Some(payload.voice_fx_amount),
+        user_name: Some(payload.user_name.clone()),
     })
     .map_err(|err| err.to_string())?;
 

@@ -21,6 +21,7 @@ interface SettingsPayload {
   voice_fx_amount: number;
   system_prompt: string;
   default_system_prompt: string;
+  user_name: string;
 }
 
 interface DevicesPayload {
@@ -39,6 +40,7 @@ const $ = <T extends HTMLElement>(id: string): T => {
   return el as T;
 };
 
+const userNameInput = $<HTMLInputElement>("user-name");
 const apiKeyInput = $<HTMLInputElement>("api-key");
 const apiKeyHint = $<HTMLDivElement>("api-key-hint");
 const noKeyBanner = $<HTMLDivElement>("no-key-banner");
@@ -108,6 +110,7 @@ async function load() {
   ]);
 
   defaultSystemPrompt = settings.default_system_prompt;
+  userNameInput.value = settings.user_name;
 
   noKeyBanner.classList.toggle("visible", !settings.has_api_key);
   apiKeyHint.textContent = settings.has_api_key
@@ -157,6 +160,7 @@ saveButton.addEventListener("click", async () => {
     const apiKey = apiKeyInput.value.trim();
     await invoke("save_settings", {
       payload: {
+        user_name: userNameInput.value.trim(),
         api_key: apiKey.length > 0 ? apiKey : null,
         voice: voiceSelect.value,
         device_in: deviceInSelect.value.length > 0 ? deviceInSelect.value : null,

@@ -960,7 +960,7 @@ mod tests {
             .await
             .unwrap();
         script
-            .send(ServerEvent::ModelText("olá, Laschuk".into()))
+            .send(ServerEvent::ModelText("olá, você".into()))
             .await
             .unwrap();
         script.send(ServerEvent::TurnComplete).await.unwrap();
@@ -975,7 +975,7 @@ mod tests {
         );
         assert_eq!(
             next_non_level(&mut events).await,
-            EngineEvent::ModelText("olá, Laschuk".into())
+            EngineEvent::ModelText("olá, você".into())
         );
         assert_eq!(next_non_level(&mut events).await, EngineEvent::TurnComplete);
         // Sem fila tocando, volta a ouvir depois da folga do half-duplex.

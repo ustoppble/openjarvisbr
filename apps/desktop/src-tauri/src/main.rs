@@ -10,7 +10,7 @@ mod errors;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 
-use openjarvisbr_core::config::{load_api_key, load_settings, DEFAULT_SYSTEM_PROMPT};
+use openjarvisbr_core::config::{effective_system_prompt, load_api_key, load_settings};
 use openjarvisbr_core::engine::{Engine, EngineConfig, EngineEvent, EngineHandle, EngineState};
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::TrayIconBuilder;
@@ -265,6 +265,7 @@ async fn forward_events(app: AppHandle, mut events: broadcast::Receiver<EngineEv
 /// Monta a `EngineConfig` a partir da chave e do config.toml atuais.
 fn build_engine_config(api_key: String) -> EngineConfig {
     let settings = load_settings();
+    let system_prompt = effective_system_prompt(&settings);
     EngineConfig {
         api_key,
         voice: settings.voice.unwrap_or_else(|| "Puck".to_string()),
@@ -272,9 +273,7 @@ fn build_engine_config(api_key: String) -> EngineConfig {
         device_out: settings.device_out,
         barge_in: settings.barge_in.unwrap_or(false),
         record_dir: None,
-        system_prompt: settings
-            .system_prompt
-            .unwrap_or_else(|| DEFAULT_SYSTEM_PROMPT.to_string()),
+        system_prompt,
         fx_amount: settings.voice_fx_amount.unwrap_or(0.35),
     }
 }

@@ -115,6 +115,7 @@ fn main() {
 
     // Flag na linha de comando vence o config.toml, que vence o padrão.
     let settings = config::load_settings();
+    let system_prompt = config::effective_system_prompt(&settings);
     let engine_config = EngineConfig {
         api_key,
         voice: cli.voice.or(settings.voice).unwrap_or_else(|| "Puck".to_string()),
@@ -129,9 +130,7 @@ fn main() {
                 settings.voice_fx_amount.unwrap_or(0.35)
             }
         }),
-        system_prompt: settings
-            .system_prompt
-            .unwrap_or_else(|| config::DEFAULT_SYSTEM_PROMPT.to_string()),
+        system_prompt,
     };
     let barge_in = engine_config.barge_in;
     let fx_amount = engine_config.fx_amount.clamp(0.0, 1.0);
