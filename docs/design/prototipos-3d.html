@@ -1,0 +1,607 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OpenJarvisBR v2 — Protótipos 3D | Three.js</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #0a0a0a;
+            color: #fff;
+            overflow: hidden;
+        }
+
+        #canvas {
+            display: block;
+            width: 100%;
+            height: 100%;
+        }
+
+        .controls {
+            position: fixed;
+            top: 20px;
+            left: 20px;
+            z-index: 100;
+            background: rgba(10, 10, 10, 0.9);
+            padding: 20px;
+            border-radius: 8px;
+            border: 1px solid #333;
+        }
+
+        .controls h3 {
+            margin-bottom: 15px;
+            font-size: 14px;
+            color: #aaa;
+        }
+
+        .direction-selector {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 8px;
+            margin-bottom: 15px;
+        }
+
+        .direction-btn {
+            padding: 8px 12px;
+            background: rgba(50, 50, 50, 0.8);
+            border: 1px solid #444;
+            color: #ccc;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 12px;
+            transition: all 0.2s;
+        }
+
+        .direction-btn:hover,
+        .direction-btn.active {
+            background: #0066cc;
+            border-color: #0066cc;
+            color: #fff;
+        }
+
+        .state-controls {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .state-btn {
+            padding: 10px 15px;
+            border: none;
+            border-radius: 4px;
+            background: #333;
+            color: #ccc;
+            cursor: pointer;
+            font-size: 13px;
+            transition: all 0.2s;
+        }
+
+        .state-btn:hover {
+            background: #444;
+        }
+
+        .state-btn.active {
+            background: #0066cc;
+            color: #fff;
+        }
+
+        .state-btn.listening {
+            background: #00b050;
+        }
+
+        .state-btn.listening.active {
+            background: #008c3a;
+        }
+
+        .state-btn.speaking {
+            background: #ff6b35;
+        }
+
+        .state-btn.speaking.active {
+            background: #cc5628;
+        }
+
+        .info {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            z-index: 100;
+            background: rgba(10, 10, 10, 0.9);
+            padding: 20px;
+            border-radius: 8px;
+            border: 1px solid #333;
+            max-width: 300px;
+            font-size: 12px;
+            line-height: 1.6;
+        }
+
+        .info h3 {
+            margin-bottom: 10px;
+            color: #aaa;
+            font-size: 13px;
+        }
+
+        .info p {
+            margin-bottom: 8px;
+            color: #999;
+        }
+
+        .color-palette {
+            display: flex;
+            gap: 6px;
+            margin-top: 10px;
+            flex-wrap: wrap;
+        }
+
+        .color-swatch {
+            width: 24px;
+            height: 24px;
+            border-radius: 3px;
+            border: 1px solid #555;
+        }
+
+        .fps {
+            position: fixed;
+            bottom: 20px;
+            left: 20px;
+            z-index: 100;
+            background: rgba(10, 10, 10, 0.9);
+            padding: 10px 15px;
+            border-radius: 4px;
+            font-size: 12px;
+            color: #666;
+            font-family: 'Courier New', monospace;
+        }
+
+        .loading {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            z-index: 200;
+            background: rgba(10, 10, 10, 0.95);
+            padding: 40px;
+            border-radius: 8px;
+            border: 1px solid #333;
+            text-align: center;
+            animation: fadeOut 0.5s 2s forwards;
+        }
+
+        @keyframes fadeOut {
+            to { opacity: 0; pointer-events: none; }
+        }
+    </style>
+</head>
+<body>
+    <canvas id="canvas"></canvas>
+
+    <div class="controls">
+        <h3>Direções</h3>
+        <div class="direction-selector">
+            <button class="direction-btn active" onclick="selectDirection(0)">1. Siri</button>
+            <button class="direction-btn" onclick="selectDirection(1)">2. Raycast</button>
+            <button class="direction-btn" onclick="selectDirection(2)">3. ChatGPT</button>
+            <button class="direction-btn" onclick="selectDirection(3)">4. Perplexity</button>
+            <button class="direction-btn" onclick="selectDirection(4)">5. JARVIS</button>
+            <button class="direction-btn" onclick="selectDirection(5)">6. Glass</button>
+            <button class="direction-btn" onclick="selectDirection(6)">7. Minimal</button>
+        </div>
+
+        <h3 style="margin-top: 15px;">Estado</h3>
+        <div class="state-controls">
+            <button class="state-btn" onclick="setState('standby')">🔇 Standby</button>
+            <button class="state-btn listening active" onclick="setState('listening')">🎤 Escutando</button>
+            <button class="state-btn speaking" onclick="setState('speaking')">💬 Falando</button>
+            <button class="state-btn" onclick="toggleAnimation()">⏸ Pausar</button>
+        </div>
+    </div>
+
+    <div class="info">
+        <h3 id="direction-name">1. Siri Minimalist Pill</h3>
+        <p id="direction-desc">Waveform bars em blue girando em 3D</p>
+        <div class="color-palette" id="palette"></div>
+    </div>
+
+    <div class="fps">FPS: <span id="fps-counter">60</span></div>
+
+    <div class="loading">Loading Three.js scene...</div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script>
+        let scene, camera, renderer;
+        let currentDirection = 0;
+        let currentState = 'listening';
+        let isAnimating = true;
+        let objects = [];
+
+        const directions = [
+            {
+                name: "1. Siri Minimalist Pill",
+                desc: "Waveform bars em blue girando em 3D",
+                colors: { bg: '#0a0e27', primary: '#64b5f6', accent: '#ffd54f' }
+            },
+            {
+                name: "2. Raycast Dark Cockpit",
+                desc: "Dots pulsantes em coral orbitando",
+                colors: { bg: '#0c0c0c', primary: '#ff6363', accent: '#e0e0e0' }
+            },
+            {
+                name: "3. ChatGPT Floating Overlay",
+                desc: "Três esferas respirando em teal",
+                colors: { bg: '#ffffff', primary: '#10a37f', accent: '#0d0d0d' }
+            },
+            {
+                name: "4. Perplexity Voice Orb",
+                desc: "Orb com 7 dots em órbita (purple + cyan)",
+                colors: { bg: '#1a1a1a', primary: '#6b5ff0', secondary: '#06b6d4' }
+            },
+            {
+                name: "5. JARVIS Holographic HUD",
+                desc: "Arc Reactor 3D pulsante + waveform orange",
+                colors: { bg: '#0a0a0a', primary: '#ff6b35', accent: '#ffd700' }
+            },
+            {
+                name: "6. Glassmorphism Voice Wave",
+                desc: "Ondas 3D com glassmorphism (purple + cyan)",
+                colors: { bg: '#0c0c1e', primary: '#7c3aed', secondary: '#06b6d4' }
+            },
+            {
+                name: "7. Minimal Mono Listener",
+                desc: "Formas ASCII em 3D wireframe branco",
+                colors: { bg: '#000000', primary: '#ffffff', accent: '#666666' }
+            }
+        ];
+
+        function hexToRgb(hex) {
+            const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+            return result ? [
+                parseInt(result[1], 16) / 255,
+                parseInt(result[2], 16) / 255,
+                parseInt(result[3], 16) / 255
+            ] : [1, 1, 1];
+        }
+
+        function init() {
+            // Scene
+            scene = new THREE.Scene();
+            const bgColor = hexToRgb(directions[currentDirection].colors.bg);
+            scene.background = new THREE.Color(...bgColor);
+
+            // Camera
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+            camera.position.z = 5;
+
+            // Renderer
+            renderer = new THREE.WebGLRenderer({ antialias: true, canvas: document.getElementById('canvas') });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.setPixelRatio(window.devicePixelRatio);
+
+            // Lighting
+            const light1 = new THREE.DirectionalLight(0xffffff, 0.8);
+            light1.position.set(5, 5, 5);
+            scene.add(light1);
+
+            const light2 = new THREE.AmbientLight(0xffffff, 0.4);
+            scene.add(light2);
+
+            createScene();
+            animate();
+            window.addEventListener('resize', onWindowResize);
+        }
+
+        function createScene() {
+            // Clear previous objects
+            objects.forEach(obj => scene.remove(obj));
+            objects = [];
+
+            const colors = directions[currentDirection].colors;
+
+            switch (currentDirection) {
+                case 0: createSiriScene(colors); break;
+                case 1: createRaycastScene(colors); break;
+                case 2: createChatGPTScene(colors); break;
+                case 3: createPerplexityScene(colors); break;
+                case 4: createJarvisScene(colors); break;
+                case 5: createGlassScene(colors); break;
+                case 6: createMinimalScene(colors); break;
+            }
+
+            updateInfo();
+            scene.background = new THREE.Color(...hexToRgb(colors.bg));
+        }
+
+        function createSiriScene(colors) {
+            const primaryColor = new THREE.Color(...hexToRgb(colors.primary));
+
+            for (let i = 0; i < 5; i++) {
+                const geometry = new THREE.BoxGeometry(0.3, 2, 0.3);
+                const material = new THREE.MeshPhongMaterial({ color: primaryColor });
+                const bar = new THREE.Mesh(geometry, material);
+
+                bar.position.x = (i - 2) * 0.8;
+                bar.userData = { type: 'siri-bar', index: i };
+                scene.add(bar);
+                objects.push(bar);
+            }
+        }
+
+        function createRaycastScene(colors) {
+            const primaryColor = new THREE.Color(...hexToRgb(colors.primary));
+
+            for (let i = 0; i < 8; i++) {
+                const angle = (i / 8) * Math.PI * 2;
+                const geometry = new THREE.SphereGeometry(0.3, 32, 32);
+                const material = new THREE.MeshPhongMaterial({ color: primaryColor });
+                const sphere = new THREE.Mesh(geometry, material);
+
+                sphere.position.x = Math.cos(angle) * 2;
+                sphere.position.y = Math.sin(angle) * 2;
+                sphere.userData = { type: 'raycast-dot', angle: angle, radius: 2, index: i };
+                scene.add(sphere);
+                objects.push(sphere);
+            }
+        }
+
+        function createChatGPTScene(colors) {
+            const primaryColor = new THREE.Color(...hexToRgb(colors.primary));
+
+            for (let i = 0; i < 3; i++) {
+                const geometry = new THREE.SphereGeometry(0.4, 32, 32);
+                const material = new THREE.MeshPhongMaterial({ color: primaryColor });
+                const sphere = new THREE.Mesh(geometry, material);
+
+                sphere.position.x = (i - 1) * 1.2;
+                sphere.userData = { type: 'chatgpt-sphere', index: i };
+                scene.add(sphere);
+                objects.push(sphere);
+            }
+        }
+
+        function createPerplexityScene(colors) {
+            const primaryColor = new THREE.Color(...hexToRgb(colors.primary));
+            const secondaryColor = new THREE.Color(...hexToRgb(colors.secondary || colors.primary));
+
+            // Centro
+            const centerGeo = new THREE.SphereGeometry(0.3, 32, 32);
+            const centerMat = new THREE.MeshPhongMaterial({ color: primaryColor });
+            const center = new THREE.Mesh(centerGeo, centerMat);
+            scene.add(center);
+            objects.push(center);
+
+            // Orb com 7 dots
+            for (let i = 0; i < 7; i++) {
+                const angle = (i / 7) * Math.PI * 2;
+                const geometry = new THREE.SphereGeometry(0.2, 32, 32);
+                const material = new THREE.MeshPhongMaterial({
+                    color: i % 2 === 0 ? primaryColor : secondaryColor
+                });
+                const sphere = new THREE.Mesh(geometry, material);
+
+                sphere.position.x = Math.cos(angle) * 2;
+                sphere.position.y = Math.sin(angle) * 2;
+                sphere.userData = { type: 'perplexity-dot', angle: angle, radius: 2, index: i };
+                scene.add(sphere);
+                objects.push(sphere);
+            }
+        }
+
+        function createJarvisScene(colors) {
+            const primaryColor = new THREE.Color(...hexToRgb(colors.primary));
+
+            // Arc Reactor (núcleo)
+            const coreGeo = new THREE.IcosahedronGeometry(0.5, 4);
+            const coreMat = new THREE.MeshPhongMaterial({
+                color: primaryColor,
+                emissive: primaryColor,
+                emissiveIntensity: 0.5
+            });
+            const core = new THREE.Mesh(coreGeo, coreMat);
+            scene.add(core);
+            objects.push(core);
+
+            // Anél rotativo
+            const ringGeo = new THREE.TorusGeometry(1.5, 0.1, 8, 100);
+            const ringMat = new THREE.MeshPhongMaterial({ color: primaryColor });
+            const ring = new THREE.Mesh(ringGeo, ringMat);
+            ring.rotation.x = Math.PI / 4;
+            ring.userData = { type: 'jarvis-ring' };
+            scene.add(ring);
+            objects.push(ring);
+
+            // Waveform bars
+            for (let i = 0; i < 6; i++) {
+                const angle = (i / 6) * Math.PI * 2;
+                const geometry = new THREE.BoxGeometry(0.2, 1, 0.2);
+                const material = new THREE.MeshPhongMaterial({ color: primaryColor });
+                const bar = new THREE.Mesh(geometry, material);
+
+                bar.position.x = Math.cos(angle) * 2.5;
+                bar.position.y = Math.sin(angle) * 2.5;
+                bar.lookAt(0, 0, 0);
+                bar.userData = { type: 'jarvis-bar', angle: angle, index: i };
+                scene.add(bar);
+                objects.push(bar);
+            }
+        }
+
+        function createGlassScene(colors) {
+            const primaryColor = new THREE.Color(...hexToRgb(colors.primary));
+            const secondaryColor = new THREE.Color(...hexToRgb(colors.secondary || colors.primary));
+
+            // Ondas 3D (planos)
+            for (let i = 0; i < 3; i++) {
+                const geometry = new THREE.PlaneGeometry(4, 1);
+                const material = new THREE.MeshPhongMaterial({
+                    color: i % 2 === 0 ? primaryColor : secondaryColor,
+                    wireframe: false,
+                    transparent: true,
+                    opacity: 0.5 + (i * 0.15)
+                });
+                const plane = new THREE.Mesh(geometry, material);
+
+                plane.position.y = (i - 1) * 1.2;
+                plane.position.z = -1 + i * 0.5;
+                plane.userData = { type: 'glass-wave', index: i };
+                scene.add(plane);
+                objects.push(plane);
+            }
+        }
+
+        function createMinimalScene(colors) {
+            const primaryColor = new THREE.Color(...hexToRgb(colors.primary));
+
+            // Cube wireframe
+            const geometry = new THREE.BoxGeometry(2, 2, 2);
+            const material = new THREE.MeshBasicMaterial({
+                color: primaryColor,
+                wireframe: true
+            });
+            const cube = new THREE.Mesh(geometry, material);
+            cube.userData = { type: 'minimal-cube' };
+            scene.add(cube);
+            objects.push(cube);
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+
+            if (isAnimating) {
+                const time = Date.now() * 0.001;
+                const speed = currentState === 'speaking' ? 2 : 1;
+
+                objects.forEach(obj => {
+                    if (obj.userData.type === 'siri-bar') {
+                        const scale = 1 + 0.5 * Math.sin(time * 3 + obj.userData.index * 0.2);
+                        obj.scale.y = scale;
+                        obj.rotation.z += 0.01 * speed;
+                    }
+                    else if (obj.userData.type === 'raycast-dot') {
+                        const scale = 0.8 + 0.4 * Math.sin(time * 2 + obj.userData.index * 0.3);
+                        obj.scale.set(scale, scale, scale);
+                        obj.userData.angle += 0.01 * speed;
+                        obj.position.x = Math.cos(obj.userData.angle) * obj.userData.radius;
+                        obj.position.y = Math.sin(obj.userData.angle) * obj.userData.radius;
+                    }
+                    else if (obj.userData.type === 'chatgpt-sphere') {
+                        const scale = 0.8 + 0.3 * Math.sin(time * 1.5 + obj.userData.index * 0.5);
+                        obj.scale.set(scale, scale, scale);
+                        obj.rotation.x += 0.003;
+                        obj.rotation.y += 0.005;
+                    }
+                    else if (obj.userData.type === 'perplexity-dot') {
+                        const scale = 0.8 + 0.3 * Math.sin(time * 2 + obj.userData.index * 0.3);
+                        obj.scale.set(scale, scale, scale);
+                        obj.userData.angle += 0.005 * speed;
+                        obj.position.x = Math.cos(obj.userData.angle) * obj.userData.radius;
+                        obj.position.y = Math.sin(obj.userData.angle) * obj.userData.radius;
+                    }
+                    else if (obj.userData.type === 'jarvis-ring') {
+                        obj.rotation.z += 0.01 * speed;
+                    }
+                    else if (obj.userData.type === 'jarvis-bar') {
+                        const scale = 0.8 + 1 * Math.sin(time * 2.5 + obj.userData.index * 0.3);
+                        obj.scale.y = scale;
+                    }
+                    else if (obj.userData.type === 'glass-wave') {
+                        obj.position.y = obj.userData.index - 1 + 0.3 * Math.sin(time + obj.userData.index);
+                        obj.rotation.z += 0.002 * speed;
+                    }
+                    else if (obj.userData.type === 'minimal-cube') {
+                        obj.rotation.x += 0.005;
+                        obj.rotation.y += 0.008;
+                    }
+                });
+
+                // Core do Jarvis
+                objects.forEach(obj => {
+                    if (obj.geometry?.type === 'IcosahedronGeometry') {
+                        obj.scale.set(
+                            1 + 0.2 * Math.sin(time * 2),
+                            1 + 0.2 * Math.sin(time * 2),
+                            1 + 0.2 * Math.sin(time * 2)
+                        );
+                    }
+                });
+            }
+
+            // Aplicar estado visual
+            if (currentState === 'standby') {
+                objects.forEach(obj => obj.material && (obj.material.opacity = 0.3));
+            } else {
+                objects.forEach(obj => obj.material && (obj.material.opacity = 1));
+            }
+
+            renderer.render(scene, camera);
+            updateFPS();
+        }
+
+        function selectDirection(idx) {
+            currentDirection = idx;
+            document.querySelectorAll('.direction-btn').forEach((btn, i) => {
+                btn.classList.toggle('active', i === idx);
+            });
+            if (scene) createScene();
+        }
+
+        function setState(state) {
+            currentState = state;
+            document.querySelectorAll('.state-btn').forEach(btn => {
+                btn.classList.remove('active');
+            });
+            event.target.classList.add('active');
+        }
+
+        function toggleAnimation() {
+            isAnimating = !isAnimating;
+            event.target.classList.toggle('active');
+        }
+
+        function updateInfo() {
+            const dir = directions[currentDirection];
+            document.getElementById('direction-name').textContent = dir.name;
+            document.getElementById('direction-desc').textContent = dir.desc;
+
+            const paletteDiv = document.getElementById('palette');
+            paletteDiv.innerHTML = '';
+            Object.entries(dir.colors).forEach(([name, hex]) => {
+                if (hex.startsWith('#')) {
+                    const swatch = document.createElement('div');
+                    swatch.className = 'color-swatch';
+                    swatch.style.background = hex;
+                    swatch.title = hex;
+                    paletteDiv.appendChild(swatch);
+                }
+            });
+        }
+
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        let lastTime = performance.now();
+        let frameCount = 0;
+
+        function updateFPS() {
+            frameCount++;
+            const now = performance.now();
+            if (now >= lastTime + 1000) {
+                document.getElementById('fps-counter').textContent = frameCount;
+                frameCount = 0;
+                lastTime = now;
+            }
+        }
+
+        // Start
+        window.addEventListener('load', init);
+    </script>
+</body>
+</html>
