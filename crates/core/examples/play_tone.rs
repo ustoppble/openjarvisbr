@@ -1,17 +1,11 @@
 //! Exemplo manual do `Player`: toca um tom de 1s e depois um tom de 5s que é
 //! interrompido por `flush()` após 1s (o som deve parar em ~1s).
-//!
-//! Roda fora da árvore de módulos do binário `jarvis` (que não expõe uma lib),
-//! então inclui o mesmo `audio/mod.rs` via `#[path]`.
-
-#[path = "../src/audio/mod.rs"]
-mod audio;
 
 use std::f32::consts::PI;
 use std::thread::sleep;
 use std::time::Duration;
 
-use audio::playback::Player;
+use openjarvisbr_core::audio::playback::Player;
 
 const SAMPLE_RATE: u32 = 24_000;
 

@@ -41,9 +41,12 @@ api_key = "..."
 
 ## Rodar
 
+O repo é um workspace Cargo: `crates/core` (lib `openjarvisbr-core` — áudio, sessão Live,
+config) e `crates/cli` (bin `jarvis`, usa o core).
+
 ```sh
 . "$HOME/.cargo/env"
-cargo run --release
+cargo run --release --bin jarvis
 ```
 
 Flags: `--voice`, `--device-in`, `--device-out`, `--debug`.

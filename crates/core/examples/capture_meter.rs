@@ -4,10 +4,7 @@
 //!
 //! Uso: `cargo run --example capture_meter [-- --device-in "Nome"]`
 
-#[path = "../src/audio/capture.rs"]
-mod capture;
-#[path = "../src/audio/resample.rs"]
-mod resample;
+use openjarvisbr_core::audio::capture;
 
 use std::sync::mpsc;
 use std::time::Duration;

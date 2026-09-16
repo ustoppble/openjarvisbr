@@ -1,14 +1,9 @@
 //! Teste de integração com a Gemini Live API real. Ignorado por padrão:
 //! `GEMINI_API_KEY=... cargo test -- --ignored live_connect`.
-//!
-//! O crate só tem binário, então o módulo `live` é incluído pelo caminho.
-
-#[path = "../src/live/mod.rs"]
-mod live;
 
 use std::time::{Duration, Instant};
 
-use live::session::{LiveConfig, LiveError, LiveSession};
+use openjarvisbr_core::live::session::{LiveConfig, LiveError, LiveSession};
 
 #[tokio::test]
 #[ignore = "precisa de rede e GEMINI_API_KEY"]

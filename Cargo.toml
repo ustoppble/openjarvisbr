@@ -1,9 +1,8 @@
-[package]
-name = "openjarvisbr"
-version = "0.1.0"
-edition = "2021"
+[workspace]
+resolver = "2"
+members = ["crates/core", "crates/cli"]
 
-[dependencies]
+[workspace.dependencies]
 base64 = "0.22.1"
 clap = { version = "4.6.7", features = ["derive"] }
 colored = "3.1.1"
@@ -23,7 +22,3 @@ tokio-tungstenite = { version = "0.28", features = ["rustls-tls-webpki-roots"] }
 toml = "1.1.6"
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
-
-[[bin]]
-name = "jarvis"
-path = "src/main.rs"

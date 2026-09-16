@@ -1,13 +1,9 @@
 //! Ponto de entrada da OpenJarvisBR: parseia flags, carrega config e sobe a App.
 
-mod app;
-mod audio;
-mod config;
-mod live;
-
 use clap::Parser;
 
-use app::{App, AppConfig};
+use openjarvisbr_core::app::{App, AppConfig};
+use openjarvisbr_core::config;
 
 /// Assistente de voz OpenJarvisBR — conversa contínua com o gemini-3.8-live.
 #[derive(Parser, Debug)]

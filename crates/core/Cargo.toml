@@ -1,0 +1,25 @@
+[package]
+name = "openjarvisbr-core"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+base64.workspace = true
+colored.workspace = true
+cpal.workspace = true
+crossterm.workspace = true
+futures-util.workspace = true
+hound.workspace = true
+ringbuf.workspace = true
+rubato.workspace = true
+rustls.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tokio-tungstenite.workspace = true
+toml.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tracing-subscriber.workspace = true

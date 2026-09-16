@@ -1,0 +1,16 @@
+[package]
+name = "openjarvisbr-cli"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "jarvis"
+path = "src/main.rs"
+
+[dependencies]
+openjarvisbr-core = { path = "../core" }
+clap.workspace = true
+fs4.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
