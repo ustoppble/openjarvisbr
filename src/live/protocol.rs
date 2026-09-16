@@ -35,6 +35,8 @@ pub struct SetupRequest {
 #[serde(rename_all = "camelCase")]
 pub struct Setup {
     pub model: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub system_instruction: Option<SystemInstruction>,
     pub generation_config: GenerationConfig,
     pub input_audio_transcription: AudioTranscriptionConfig,
     pub output_audio_transcription: AudioTranscriptionConfig,
@@ -65,6 +67,12 @@ pub struct PrebuiltVoiceConfig {
     pub voice_name: String,
 }
 
+/// `systemInstruction`: identidade e regras do assistente.
+#[derive(Debug, Clone, Serialize)]
+pub struct SystemInstruction {
+    pub parts: Vec<TextPart>,
+}
+
 /// Objeto vazio: a presença do campo já ativa a transcrição.
 #[derive(Debug, Clone, Copy, Default, Serialize)]
 pub struct AudioTranscriptionConfig {}
@@ -76,6 +84,7 @@ impl SetupRequest {
         SetupRequest {
             setup: Setup {
                 model: MODEL.to_string(),
+                system_instruction: None,
                 generation_config: GenerationConfig {
                     response_modalities: vec!["AUDIO".to_string()],
                     speech_config: SpeechConfig {
@@ -90,6 +99,16 @@ impl SetupRequest {
                 output_audio_transcription: AudioTranscriptionConfig::default(),
             },
         }
+    }
+}
+
+impl SetupRequest {
+    /// Define a instrução de sistema (identidade, idioma, regras).
+    pub fn with_system_instruction(mut self, text: impl Into<String>) -> Self {
+        self.setup.system_instruction = Some(SystemInstruction {
+            parts: vec![TextPart { text: text.into() }],
+        });
+        self
     }
 }
 

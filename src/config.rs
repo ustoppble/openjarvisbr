@@ -16,6 +16,44 @@ struct FileConfig {
     api_key: Option<String>,
     /// Nome legado, ainda aceito.
     gemini_api_key: Option<String>,
+    /// Instrução de sistema (identidade, idioma, regras). Vazio = padrão.
+    system_prompt: Option<String>,
+    voice: Option<String>,
+    device_in: Option<String>,
+    device_out: Option<String>,
+    barge_in: Option<bool>,
+}
+
+/// Identidade padrão da OpenJarvisBR. Pode ser trocada por `system_prompt`
+/// no config.toml.
+pub const DEFAULT_SYSTEM_PROMPT: &str = "\
+Você é a OpenJarvisBR, assistente de voz pessoal do Guilherme Laschuk, \
+criada em Rust com o Gemini Live. Quando perguntarem quem você é, diga que é a \
+OpenJarvisBR, o Jarvis dele, e nunca se descreva como 'modelo de linguagem'.\n\
+\n\
+Idioma: fale SEMPRE em português do Brasil, natural e direto, como numa conversa \
+entre amigos. Só use outra língua quando ele pedir explicitamente e, mesmo assim, \
+apenas na frase-alvo: diga a frase na outra língua e volte imediatamente para o \
+português para explicar, traduzir e conduzir. Nunca troque o idioma da conversa \
+inteira por conta própria. Se ele disser que não entendeu, repita em português.\n\
+\n\
+Ao ensinar (ex.: inglês do zero): assuma que ele é iniciante absoluto, vá uma \
+frase por vez, explique em português o que significa, peça para ele repetir, \
+elogie de forma curta e siga em frente. Respostas curtas: isto é voz, não texto.\n\
+\n\
+Memória: preste atenção ao que ele diz ao longo da conversa e retome quando fizer \
+sentido (nomes, metas, decisões). Ele está fazendo uma live enquanto fala com você: \
+às vezes se dirige à audiência ('gurizada'); nesses momentos, não interrompa e \
+não responda como se fosse para você, a menos que ele te chame.";
+
+/// Configuração efetiva depois de juntar config.toml e flags.
+#[derive(Debug, Clone, Default)]
+pub struct Settings {
+    pub system_prompt: Option<String>,
+    pub voice: Option<String>,
+    pub device_in: Option<String>,
+    pub device_out: Option<String>,
+    pub barge_in: Option<bool>,
 }
 
 impl FileConfig {
@@ -65,6 +103,27 @@ fn config_path() -> Option<PathBuf> {
     )
 }
 
+/// Lê os demais campos de `~/.config/jarvis/config.toml` (todos opcionais).
+/// Arquivo ausente ou inválido → padrões.
+pub fn load_settings() -> Settings {
+    let Some(path) = config_path() else {
+        return Settings::default();
+    };
+    let Ok(contents) = std::fs::read_to_string(&path) else {
+        return Settings::default();
+    };
+    let Ok(parsed) = toml::from_str::<FileConfig>(&contents) else {
+        return Settings::default();
+    };
+    Settings {
+        system_prompt: parsed.system_prompt.filter(|s| !s.trim().is_empty()),
+        voice: parsed.voice.filter(|s| !s.trim().is_empty()),
+        device_in: parsed.device_in.filter(|s| !s.trim().is_empty()),
+        device_out: parsed.device_out.filter(|s| !s.trim().is_empty()),
+        barge_in: parsed.barge_in,
+    }
+}
+
 /// Carrega a chave da API a partir da env `GEMINI_API_KEY` ou, na ausência
 /// dela, de `~/.config/jarvis/config.toml`.
 pub fn load_api_key() -> Result<String, ConfigError> {
@@ -99,6 +158,19 @@ mod tests {
         assert_eq!(b.key().as_deref(), Some("xyz"));
         let c: FileConfig = toml::from_str("api_key = \"\"").unwrap();
         assert_eq!(c.key(), None);
+    }
+
+    #[test]
+    fn file_config_reads_optional_settings() {
+        let c: FileConfig = toml::from_str(
+            "api_key = \"k\"\nsystem_prompt = \"seja breve\"\nvoice = \"Kore\"\ndevice_in = \"Shure MV7+\"\nbarge_in = true\n",
+        )
+        .unwrap();
+        assert_eq!(c.system_prompt.as_deref(), Some("seja breve"));
+        assert_eq!(c.voice.as_deref(), Some("Kore"));
+        assert_eq!(c.device_in.as_deref(), Some("Shure MV7+"));
+        assert_eq!(c.barge_in, Some(true));
+        assert!(c.device_out.is_none());
     }
 
     #[test]

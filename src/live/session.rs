@@ -54,6 +54,8 @@ pub struct LiveConfig {
     pub voice: String,
     /// Grava cada mensagem crua do servidor (uma por linha) para diagnóstico.
     pub raw_log: Option<std::path::PathBuf>,
+    /// Instrução de sistema enviada no setup (identidade, idioma, regras).
+    pub system_prompt: Option<String>,
 }
 
 impl LiveConfig {
@@ -62,7 +64,13 @@ impl LiveConfig {
             api_key: api_key.into(),
             voice: voice.into(),
             raw_log: None,
+            system_prompt: None,
         }
+    }
+
+    pub fn with_system_prompt(mut self, text: impl Into<String>) -> Self {
+        self.system_prompt = Some(text.into());
+        self
     }
 
     pub fn with_raw_log(mut self, path: std::path::PathBuf) -> Self {
@@ -406,7 +414,11 @@ async fn open(cfg: &LiveConfig, context: Option<&str>) -> Result<(Sink, Stream),
         .map_err(|err| handshake_error(err, &cfg.api_key))?;
     let (mut sink, mut stream) = socket.split();
 
-    let setup = serde_json::to_string(&SetupRequest::new(cfg.voice.clone()))
+    let mut request = SetupRequest::new(cfg.voice.clone());
+    if let Some(prompt) = &cfg.system_prompt {
+        request = request.with_system_instruction(prompt.clone());
+    }
+    let setup = serde_json::to_string(&request)
         .map_err(|err| LiveError::Connect(err.to_string()))?;
     sink.send(Message::text(setup))
         .await

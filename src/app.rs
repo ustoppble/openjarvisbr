@@ -106,6 +106,8 @@ pub struct AppConfig {
     pub barge_in: bool,
     /// Pasta onde gravar playback.wav, mic.wav e events.log (diagnóstico).
     pub record_dir: Option<std::path::PathBuf>,
+    /// Instrução de sistema enviada no setup.
+    pub system_prompt: String,
 }
 
 /// Aplicação principal: mantém o estado atual da sessão.
@@ -129,7 +131,8 @@ impl App {
     pub async fn run(&mut self) -> i32 {
         self.state = State::Connecting;
         info!("conectando à Live API");
-        let mut cfg = LiveConfig::new(self.config.api_key.clone(), self.config.voice.clone());
+        let mut cfg = LiveConfig::new(self.config.api_key.clone(), self.config.voice.clone())
+            .with_system_prompt(self.config.system_prompt.clone());
         if let Some(dir) = &self.config.record_dir {
             let _ = std::fs::create_dir_all(dir);
             cfg = cfg.with_raw_log(dir.join("raw.jsonl"));

@@ -13,9 +13,9 @@ use app::{App, AppConfig};
 #[derive(Parser, Debug)]
 #[command(name = "jarvis", version, about)]
 struct Cli {
-    /// Voz usada pelo modelo
-    #[arg(long, default_value = "Puck")]
-    voice: String,
+    /// Voz usada pelo modelo (padrão: config.toml ou Puck)
+    #[arg(long)]
+    voice: Option<String>,
 
     /// Dispositivo de entrada de áudio (microfone)
     #[arg(long)]
@@ -96,7 +96,7 @@ fn main() {
     };
 
     tracing::debug!(
-        voz = %cli.voice,
+        voz = ?cli.voice,
         device_in = ?cli.device_in,
         device_out = ?cli.device_out,
         "flags carregadas"
@@ -110,13 +110,18 @@ fn main() {
         }
     };
 
+    // Flag na linha de comando vence o config.toml, que vence o padrão.
+    let settings = config::load_settings();
     let mut app = App::new(AppConfig {
         api_key,
-        voice: cli.voice,
-        device_in: cli.device_in,
-        device_out: cli.device_out,
-        barge_in: cli.barge_in,
+        voice: cli.voice.or(settings.voice).unwrap_or_else(|| "Puck".to_string()),
+        device_in: cli.device_in.or(settings.device_in),
+        device_out: cli.device_out.or(settings.device_out),
+        barge_in: cli.barge_in || settings.barge_in.unwrap_or(false),
         record_dir: cli.record,
+        system_prompt: settings
+            .system_prompt
+            .unwrap_or_else(|| config::DEFAULT_SYSTEM_PROMPT.to_string()),
     });
     let exit_code = runtime.block_on(app.run());
     std::process::exit(exit_code);
