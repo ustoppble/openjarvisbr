@@ -1,6 +1,6 @@
 # OpenJarvisBR
 
-Assistente de voz open source, em Rust, que conversa com você em tempo real usando o
+Assistente de voz em Rust, que conversa com você em tempo real usando o
 **Gemini 3.8 Live** do Google. Roda no terminal do Mac hoje e no Windows em breve.
 
 > Status: **v3** — conversa, app de desktop, perfis e ferramentas (locais, Overclock e
@@ -171,4 +171,13 @@ O trabalho é organizado em cards no OverClick. A spec do degrau 1 está em
 
 ## Licença
 
-MIT
+Proprietário. Todos os direitos reservados. Instaladores públicos em
+https://github.com/ustoppble/openjarvisbr-releases
+
+## Publicar uma versão
+
+1. Suba a versão em `apps/desktop/src-tauri/tauri.conf.json`, `package.json` e nos `Cargo.toml`; commit e `git tag vX.Y.Z && git push origin vX.Y.Z`.
+2. A Action `release.yml` gera `.msi`/`.exe` (Windows) na release deste repo privado.
+3. No Mac: `cd apps/desktop && npm run tauri build` gera o `.dmg` em `target/release/bundle/dmg/`.
+4. Copie tudo para o repo público de downloads:
+   `gh release download vX.Y.Z -D /tmp/rel && gh release create vX.Y.Z -R ustoppble/openjarvisbr-releases --title "OpenJarvisBR vX.Y.Z" --notes-file notas.md /tmp/rel/* target/release/bundle/dmg/*.dmg`
