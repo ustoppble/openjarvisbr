@@ -195,7 +195,26 @@ fn confident_pick<'a>(a: &'a Answers, id: &str, min: f32) -> Option<&'a str> {
     (p >= min).then_some(pick)
 }
 
+/// Tools que o reflexo pode disparar. Constante: não é configurável.
+pub const REFLEX_TOOLS: &[&str] = &["app.open", "web.open", "sys.volume", "media.control"];
+
+pub fn is_reflex_tool(name: &str) -> bool {
+    REFLEX_TOOLS.contains(&name)
+}
+
+/// Defesa em profundidade: nenhuma decisão sai daqui com tool fora de `REFLEX_TOOLS`.
+fn guard(decision: Decision) -> Decision {
+    match decision {
+        Decision::Act(call) if !is_reflex_tool(&call.name) => Decision::Nothing,
+        other => other,
+    }
+}
+
 pub fn decide(s: &Situation, a: &Answers, t: &Thresholds) -> Decision {
+    guard(decide_unguarded(s, a, t))
+}
+
+fn decide_unguarded(s: &Situation, a: &Answers, t: &Thresholds) -> Decision {
     if a.noul("always").unwrap_or(0.0) >= t.confirm {
         return Decision::AlwaysAllow;
     }
@@ -497,5 +516,15 @@ mod tests {
         assert_eq!(volume_level("volume 100 por cento"), Some(100));
         assert_eq!(volume_level("volume em 250"), None);
         assert_eq!(volume_level("aumenta o volume"), None);
+    }
+
+    #[test]
+    fn so_tools_seguras_saem_do_reflexo() {
+        for name in REFLEX_TOOLS {
+            assert!(crate::tools::decisions::never_asks(name), "{name} precisa estar em NEVER_ASK");
+            assert!(is_reflex_tool(name));
+        }
+        assert!(!is_reflex_tool("shell.run"));
+        assert!(!is_reflex_tool("fs.read")); // NEVER_ASK, mas fora do reflexo
     }
 }
