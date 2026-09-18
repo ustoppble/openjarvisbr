@@ -556,6 +556,9 @@ struct ToolTimeouts {
     voice_window: Duration,
     confirm: Duration,
     exec: Duration,
+    /// Folga em que uma chamada igual do modelo, já numa fala nova, ainda
+    /// conta como repetição da fala anterior (JRV-97).
+    late_dup_grace: Duration,
 }
 
 impl Default for ToolTimeouts {
@@ -564,6 +567,7 @@ impl Default for ToolTimeouts {
             voice_window: engine_tools::VOICE_CONFIRM_WINDOW,
             confirm: engine_tools::CONFIRM_TIMEOUT,
             exec: engine_tools::EXEC_TIMEOUT,
+            late_dup_grace: engine_tools::LATE_DUP_GRACE,
         }
     }
 }
@@ -665,6 +669,10 @@ struct Worker {
     /// fala nova começa; vale `REFLEX_DONE_WINDOW`). O reflexo não repete o
     /// que o modelo já pediu, e o modelo não repete a si mesmo.
     model_calls: Vec<(ToolCall, Instant)>,
+    /// Falas do usuário desde o último turno concluído do modelo. Uma chamada
+    /// só aprende a frase quando é exatamente 1: com 2+ a chamada pode ser
+    /// resposta atrasada à fala anterior (JRV-97), e na dúvida não aprende.
+    utterances_since_turn: u32,
 }
 
 impl Worker {
@@ -778,6 +786,7 @@ impl Worker {
             recently_done: Vec::new(),
             pending_learn: HashMap::new(),
             model_calls: Vec::new(),
+            utterances_since_turn: 0,
             registry,
             tool_specs,
             policy: Policy::with_full_access(full_access.clone()),
@@ -1095,8 +1104,11 @@ impl Worker {
             r.event("user_text", &text);
         }
         if self.user_heard.is_empty() {
-            // fala nova: o que o modelo pediu na anterior não conta mais
-            self.model_calls.clear();
+            // fala nova: o que o modelo pediu na anterior não conta mais,
+            // exceto o que é recente demais para não ser repetição atrasada.
+            let grace = self.timeouts.late_dup_grace;
+            self.model_calls.retain(|(_, at)| at.elapsed() < grace);
+            self.utterances_since_turn = self.utterances_since_turn.saturating_add(1);
         }
         self.user_heard.push_str(&text);
         if let Some(reflex) = &self.reflex {
@@ -1164,8 +1176,35 @@ impl Worker {
             self.respond(&call.name, ToolResult::ok(&call.id, output));
             return;
         }
-        self.pending_learn
-            .insert(call.id.clone(), self.user_heard.clone());
+        // O próprio modelo repetiu a chamada nesta fala (JRV-92): recebe
+        // sucesso sem executar de novo. Só dentro de um pedido do usuário:
+        // sem fala corrente (ex.: política mudou e o modelo refaz), não vale.
+        if self.utterances_since_turn >= 1 && self.model_already_called(&call) {
+            info!(ferramenta = %call.name, "modelo repetiu a mesma chamada nesta fala; não executa de novo");
+            if let Some(r) = self.recorder.as_mut() {
+                r.event("tool_dedup_model", format!("{} (modelo)", summary));
+            }
+            self.emit.send(EngineEvent::ToolRequested {
+                call: call.clone(),
+                risk: Risk::Safe,
+            });
+            let output = serde_json::json!({
+                "status": "já executada",
+                "nota": "você acabou de pedir exatamente esta ação nesta mesma fala; \
+                         use o resultado da chamada anterior e não chame de novo",
+            });
+            self.respond(&call.name, ToolResult::ok(&call.id, output));
+            return;
+        }
+        if self.utterances_since_turn == 1 {
+            self.pending_learn
+                .insert(call.id.clone(), self.user_heard.clone());
+        } else {
+            debug!(
+                ferramenta = %call.name, falas = self.utterances_since_turn,
+                "frase ambígua para a chamada; não aprende"
+            );
+        }
         self.model_calls
             .retain(|(_, at)| at.elapsed() < engine_tools::REFLEX_DONE_WINDOW);
         self.model_calls.push((call.clone(), Instant::now()));
@@ -1390,6 +1429,7 @@ impl Worker {
     fn end_model_turn(&mut self) {
         let turn = std::mem::take(&mut self.model_turn);
         self.user_heard.clear();
+        self.utterances_since_turn = 0;
         if !self.turn_repeated
             && engine_tools::is_repeat(&turn, &self.previous_model_turn)
         {
@@ -1956,7 +1996,7 @@ mod fake {
                 mic: Some(mic),
                 silent: Vec::new(),
                 registry: Registry::new(),
-                timeouts: ToolTimeouts::default(),
+                timeouts: ToolTimeouts { late_dup_grace: std::time::Duration::from_millis(80), ..ToolTimeouts::default() },
                 responses: mpsc::unbounded_channel().0,
                 reflex: None,
             }
@@ -2698,6 +2738,96 @@ mod tests {
         handle.stop().await;
     }
 
+    /// JRV-92 — trace 19:37:34: "Abre o Google" → o modelo chamou
+    /// web.open google.com duas vezes (call_81146 e call_81156). A segunda
+    /// chamada idêntica na mesma fala recebe sucesso sem executar.
+    #[tokio::test]
+    async fn modelo_nao_executa_a_mesma_chamada_duas_vezes_na_mesma_fala() {
+        use crate::reflex::judge::{FakeJudge, JudgeError};
+
+        let judge = Arc::new(FakeJudge::new());
+        for _ in 0..4 {
+            judge.push_err(JudgeError::Timeout);
+        }
+        let spy = SpyTool::new("web.open", Risk::Safe);
+        let (handle, mut events, script_tx) = start_reflex_engine(&spy, judge, empty_eye()).await;
+        let call = ToolCall {
+            id: "g1".into(),
+            name: "web.open".into(),
+            args: serde_json::json!({"url": "https://google.com"}),
+        };
+        // fala nova depois da folga de repetição atrasada (testes usam 80 ms)
+
+        script_tx.send(ServerEvent::UserText("abre o google".into())).await.unwrap();
+        script_tx.send(ServerEvent::ToolCall(vec![call.clone()])).await.unwrap();
+        script_tx
+            .send(ServerEvent::ToolCall(vec![ToolCall { id: "g2".into(), ..call.clone() }]))
+            .await
+            .unwrap();
+        assert!(wait_tool_result(&mut events, "g1").await.0);
+        assert!(wait_tool_result(&mut events, "g2").await.0, "a repetida recebe sucesso");
+        assert_eq!(spy.count(), 1, "dedup modelo→modelo na mesma fala");
+
+        // fala nova, mesma ação: executa de novo
+        script_tx.send(ServerEvent::TurnComplete).await.unwrap();
+        tokio::time::sleep(Duration::from_millis(120)).await;
+        script_tx.send(ServerEvent::UserText("abre o google de novo".into())).await.unwrap();
+        script_tx
+            .send(ServerEvent::ToolCall(vec![ToolCall { id: "g3".into(), ..call }]))
+            .await
+            .unwrap();
+        assert!(wait_tool_result(&mut events, "g3").await.0);
+        assert_eq!(spy.count(), 2, "fala nova não é dedup");
+        handle.stop().await;
+    }
+
+    /// JRV-97 — rodada 2, 19:57:07–08: "abre a Calculadora" → app.open
+    /// Calculator → turno concluído; "abre a globo" e, 50 ms depois, o modelo
+    /// repete app.open Calculator. A repetição atrasada não executa e, acima
+    /// de tudo, não vira "abre a globo" → Calculadora na memória.
+    #[tokio::test]
+    async fn repeticao_atrasada_do_modelo_nao_aprende_a_frase_da_fala_seguinte() {
+        use crate::reflex::judge::{FakeJudge, JudgeError};
+
+        let judge = Arc::new(FakeJudge::new());
+        for _ in 0..4 {
+            judge.push_err(JudgeError::Timeout);
+        }
+        let eye = empty_eye();
+        let spy = SpyTool::new("app.open", Risk::Safe);
+        let (handle, mut events, script_tx) = start_reflex_engine(&spy, judge, eye.clone()).await;
+        let calc = ToolCall {
+            id: "g1".into(),
+            name: "app.open".into(),
+            args: serde_json::json!({"name": "Calculator"}),
+        };
+
+        script_tx.send(ServerEvent::UserText("abre a calculadora".into())).await.unwrap();
+        script_tx.send(ServerEvent::ToolCall(vec![calc.clone()])).await.unwrap();
+        assert!(wait_tool_result(&mut events, "g1").await.0);
+        script_tx.send(ServerEvent::TurnComplete).await.unwrap();
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        assert_eq!(eye.snapshot().learned.len(), 1);
+        assert_eq!(eye.snapshot().learned[0].phrase, "abre a calculadora");
+
+        // fala nova e a repetição atrasada logo em seguida (dentro da folga)
+        script_tx.send(ServerEvent::UserText("abre a globo".into())).await.unwrap();
+        script_tx
+            .send(ServerEvent::ToolCall(vec![ToolCall { id: "g2".into(), ..calc.clone() }]))
+            .await
+            .unwrap();
+        assert!(wait_tool_result(&mut events, "g2").await.0, "recebe sucesso");
+        tokio::time::sleep(Duration::from_millis(30)).await;
+        assert_eq!(spy.count(), 1, "repetição atrasada não executa");
+        let learned = eye.snapshot().learned.clone();
+        assert_eq!(learned.len(), 1, "nada novo aprendido: {learned:?}");
+        assert!(
+            !learned.iter().any(|a| a.phrase == "abre a globo"),
+            "aprendeu par errado: {learned:?}"
+        );
+        handle.stop().await;
+    }
+
     #[tokio::test]
     async fn reflexo_acao_aprendida_confirm_pede_confirmacao_e_so_roda_com_sim() {
         use crate::reflex::judge::FakeJudge;
@@ -2852,6 +2982,7 @@ mod tests {
                 voice_window: Duration::from_secs(5),
                 confirm,
                 exec: Duration::from_secs(5),
+                late_dup_grace: Duration::from_millis(80),
             };
             let (script_tx, script_rx) = mpsc::channel(16);
             let (mic_tx, mic_rx) = mpsc::channel(16);
@@ -3203,6 +3334,7 @@ mod tests {
                 voice_window: Duration::from_secs(5),
                 confirm: Duration::from_secs(5),
                 exec: Duration::from_secs(5),
+                late_dup_grace: Duration::from_millis(80),
             };
             let backend = Backend::Fake(
                 fake::FakeBackend::new(script_rx, mic_rx).with_tools(registry, timeouts, resp_tx),

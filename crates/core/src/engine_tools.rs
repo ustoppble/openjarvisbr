@@ -26,6 +26,11 @@ pub const REPEAT_WINDOW: Duration = Duration::from_secs(30);
 /// Ação feita pelo reflexo: uma chamada igual do modelo dentro desta janela
 /// recebe sucesso sem executar de novo.
 pub const REFLEX_DONE_WINDOW: Duration = Duration::from_secs(8);
+/// Chamada idêntica do modelo que chega logo depois de uma fala nova ainda é
+/// a repetição atrasada da fala anterior (trace 19:57:08: "abre a globo" e,
+/// 50 ms depois, app.open Calculator de novo). Dentro desta folga não executa
+/// nem aprende.
+pub const LATE_DUP_GRACE: Duration = Duration::from_secs(2);
 /// Tamanho máximo dos resumos de eventos (overlay, terminal).
 const SUMMARY_MAX: usize = 160;
 

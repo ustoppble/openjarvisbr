@@ -49,7 +49,9 @@ pub async fn run(handle: EngineHandle, path: &Path) -> i32 {
     let connected = tokio::time::timeout(Duration::from_secs(30), async {
         loop {
             match events.recv().await {
-                Ok(EngineEvent::State(openjarvisbr_core::engine::EngineState::Listening)) => break true,
+                Ok(EngineEvent::State(openjarvisbr_core::engine::EngineState::Listening)) => {
+                    break true
+                }
                 Ok(EngineEvent::Error { message, .. }) => {
                     eprintln!("sessão encerrada: {message}");
                     break false;
@@ -77,15 +79,26 @@ pub async fn run(handle: EngineHandle, path: &Path) -> i32 {
                     loop {
                         match events.recv().await {
                             Ok(EngineEvent::ModelText(t)) => print!("{t}"),
-                            Ok(EngineEvent::ToolRequested { call, .. }) => println!("\n  [tool] {}", call_summary(&call)),
-                            Ok(EngineEvent::ToolResult { name, ok, summary, .. }) => {
-                                println!("  [{}] {name}: {summary}", if ok { "ok" } else { "ERRO" });
+                            Ok(EngineEvent::ToolRequested { call, .. }) => {
+                                println!("\n  [tool] {}", call_summary(&call))
+                            }
+                            Ok(EngineEvent::ToolResult {
+                                name, ok, summary, ..
+                            }) => {
+                                println!(
+                                    "  [{}] {name}: {summary}",
+                                    if ok { "ok" } else { "ERRO" }
+                                );
                                 if !ok {
                                     failures += 1;
                                 }
                             }
-                            Ok(EngineEvent::ReflexActed { call, latency_ms, .. }) => println!("  [reflexo {latency_ms} ms] {}", call.name),
-                            Ok(EngineEvent::ToolConfirmNeeded { summary, .. }) => println!("  [confirma?] {summary} (roteiro não confirma)"),
+                            Ok(EngineEvent::ReflexActed {
+                                call, latency_ms, ..
+                            }) => println!("  [reflexo {latency_ms} ms] {}", call.name),
+                            Ok(EngineEvent::ToolConfirmNeeded { summary, .. }) => {
+                                println!("  [confirma?] {summary} (roteiro não confirma)")
+                            }
                             Ok(EngineEvent::TurnComplete) => {
                                 println!();
                                 break true;
@@ -107,14 +120,20 @@ pub async fn run(handle: EngineHandle, path: &Path) -> i32 {
                         handle.stop().await;
                         return 1;
                     }
-                    Err(_) => println!("  [timeout] turno não terminou em {}s", TURN_TIMEOUT.as_secs()),
+                    Err(_) => println!(
+                        "  [timeout] turno não terminou em {}s",
+                        TURN_TIMEOUT.as_secs()
+                    ),
                 }
                 tokio::time::sleep(SETTLE).await;
             }
         }
     }
     handle.stop().await;
-    println!("roteiro terminado: {} falas, {failures} tool(s) com erro", lines.iter().filter(|l| matches!(l, Line::Say(_))).count());
+    println!(
+        "roteiro terminado: {} falas, {failures} tool(s) com erro",
+        lines.iter().filter(|l| matches!(l, Line::Say(_))).count()
+    );
     i32::from(failures > 0)
 }
 
