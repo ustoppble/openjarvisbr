@@ -3,8 +3,8 @@
 Assistente de voz em Rust, que conversa com você em tempo real usando o
 **Gemini 3.8 Live** do Google. Roda no terminal do Mac hoje e no Windows em breve.
 
-> Status: **v3** — conversa, app de desktop, perfis e ferramentas (locais, Overclock e
-> OverClick) com confirmação por voz.
+> Status: **v4** — conversa, app de desktop, perfis, ferramentas (locais, Overclock e
+> OverClick) com confirmação por voz e **reflexo** (ações seguras em ~300 ms com o Jev).
 
 ## Baixar
 
@@ -69,6 +69,49 @@ instaladores ficam como artefatos do run).
 
 Roteiro leigo das ferramentas: [`docs/testes/v3.md`](docs/testes/v3.md).
 
+## Reflexo (Jev)
+
+O **reflexo** é uma camada rápida na frente do Gemini: a cada fragmento do que você fala,
+ele pergunta ao **Jev** (modelo de decisão da [TypeSafe.ai](https://typesafe.ai)) se aquilo
+é uma ação segura e fechada e, se for, executa em ~300 ms, antes de o Jarvis terminar de
+responder. O Gemini continua sendo o cérebro; o reflexo só escolhe entre opções listadas e
+só dispara o que já não pede confirmação: abrir app, abrir site da lista, mídia, volume e
+"sim"/"não" por voz num pedido pendente. Em dúvida, fica quieto. Sem chave, tudo funciona
+como na v3.
+
+**Como ligar.** Pela janela de Configurações › aba **Reflexo** (cole a chave, marque
+**Reflexo ligado (Jev)**, cadastre os sites, **Salvar reflexo** e reconecte), ou por
+arquivo. A chave vem do `config.toml` (`typesafe_api_key`) ou da variável de ambiente
+`TYPESAFE_API_KEY` (a env vence). Nunca em log, evento, overlay ou commit.
+
+```toml
+typesafe_api_key = "..."        # ou export TYPESAFE_API_KEY="..."
+
+[reflex]
+enabled = true
+act_threshold = 0.85            # confiança mínima para agir sozinho
+confirm_threshold = 0.85        # confiança mínima para aprovar/negar por voz
+
+[[reflex.sites]]
+name = "YouTube"
+url = "https://youtube.com"
+```
+
+**Privacidade.** Enquanto o reflexo estiver ligado, a transcrição do que você fala e os
+nomes dos apps instalados/rodando e dos sites da lista são enviados à TypeSafe.ai. Com o
+reflexo desligado ou sem chave, nada sai. `web.open` pelo reflexo só recebe URLs de
+`[[reflex.sites]]`, nunca uma URL montada da fala.
+
+**Diagnóstico no terminal.** Sem abrir microfone nem Gemini:
+
+```sh
+jarvis reflex "abre o safari"   # perguntas, probabilidades, decisão e latência
+jarvis reflex --eye             # inventário: apps rodando, instalados e sites
+jarvis reflex "pode ir" --pending   # simula confirmação pendente
+```
+
+Roteiro leigo do reflexo: [`docs/testes/v4.md`](docs/testes/v4.md).
+
 ## Roadmap por degraus
 
 Cada degrau é uma entrega separada, com spec própria.
@@ -80,6 +123,7 @@ Cada degrau é uma entrega separada, com spec própria.
 | 3 | Visão de tela (frames a 1 fps) | planejado |
 | 4 | Ferramentas: rodar comandos com confirmação por voz | pronto (v3) |
 | 5 | Integração com o Overclock (abrir panes, criar cards) | pronto (v3) |
+| 6 | Reflexo: ações seguras em ~300 ms com o Jev (TypeSafe.ai) | pronto (v4) |
 
 ## Configurar a chave
 
