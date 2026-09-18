@@ -249,7 +249,12 @@ async fn reflex_diagnostic(phrase: Option<String>, only_eye: bool, pending: bool
         turn_locked: false,
     };
     let Some(questions) = build_questions(&situation) else {
-        println!("nada a perguntar para essa frase");
+        println!("decisão: Nothing");
+        println!("Jev não consultado: nenhum candidato na fala");
+        println!("latência: 0 ms");
+        println!(
+            "resumo da sessão: total 1 · Act 0 · Nothing 1 · latência média 0 ms · perguntas puladas 1"
+        );
         return 0;
     };
     let ids: Vec<&str> = questions.0.keys().map(|k| k.as_str()).collect();

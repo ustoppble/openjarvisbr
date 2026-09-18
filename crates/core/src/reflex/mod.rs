@@ -36,6 +36,22 @@ pub struct Outcome {
     pub confidence: f32,
 }
 
+/// Contadores acumulados enquanto esta instância do reflexo vive.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct SessionStats {
+    pub total: u64,
+    pub act: u64,
+    pub nothing: u64,
+    pub skipped_judge: u64,
+    pub total_latency_ms: u64,
+}
+
+impl SessionStats {
+    pub fn average_latency_ms(&self) -> u64 {
+        self.total_latency_ms.checked_div(self.total).unwrap_or(0)
+    }
+}
+
 /// Pergunta em voo há menos que isto é cancelada quando chega fragmento novo.
 const CANCEL_IF_YOUNGER_THAN: Duration = Duration::from_millis(200);
 /// Erros seguidos de cota/sobrecarga (429/529) até pausar.
@@ -62,6 +78,7 @@ pub struct Reflex {
     dead: Arc<AtomicBool>,
     quota_errors: Arc<AtomicU32>,
     paused_until: Arc<Mutex<Option<Instant>>>,
+    stats: Arc<Mutex<SessionStats>>,
     pending: Mutex<Option<InFlight>>,
 }
 
@@ -91,6 +108,7 @@ impl Reflex {
             dead: Arc::new(AtomicBool::new(false)),
             quota_errors: Arc::new(AtomicU32::new(0)),
             paused_until: Arc::new(Mutex::new(None)),
+            stats: Arc::new(Mutex::new(SessionStats::default())),
             pending: Mutex::new(None),
         };
         (reflex, rx)
@@ -119,6 +137,11 @@ impl Reflex {
         &self.eye
     }
 
+    /// Resumo das decisões `Act`/`Nothing` desta sessão do reflexo.
+    pub fn stats(&self) -> SessionStats {
+        *self.stats.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
     /// Fragmento novo da fala do usuário (acumulada no turno).
     pub fn hear(&self, heard: String, pending_confirm: bool) {
         if !self.enabled() {
@@ -145,6 +168,7 @@ impl Reflex {
         let dead = Arc::clone(&self.dead);
         let quota = Arc::clone(&self.quota_errors);
         let paused = Arc::clone(&self.paused_until);
+        let stats = Arc::clone(&self.stats);
         let thresholds = Thresholds {
             act: self.settings.act_threshold,
             confirm: self.settings.confirm_threshold,
@@ -152,6 +176,7 @@ impl Reflex {
         let debounce = Duration::from_millis(self.settings.debounce_ms);
         let task = tokio::spawn(async move {
             tokio::time::sleep(debounce).await;
+            let decision_started = Instant::now();
             let inventory = eye.snapshot();
             let turn_locked = locked.load(Ordering::Relaxed);
             let situation = Situation {
@@ -161,16 +186,25 @@ impl Reflex {
                 turn_locked,
             };
             let Some(questions) = build_questions(&situation) else {
+                // Fala não vazia e turno livre só chegam aqui quando nenhuma
+                // opção da fala casou com app, site ou ação aprendida.
+                if !heard.trim().is_empty() && !pending_confirm && !turn_locked {
+                    record_decision(
+                        &stats,
+                        &Decision::Nothing,
+                        decision_started.elapsed().as_millis() as u32,
+                        true,
+                    );
+                }
                 return;
             };
-            let t0 = Instant::now();
             match judge.ask(&heard, &questions).await {
                 Ok(answers) => {
                     quota.store(0, Ordering::Relaxed);
-                    let latency_ms = t0.elapsed().as_millis() as u32;
+                    let latency_ms = decision_started.elapsed().as_millis() as u32;
                     let decision = decide(&situation, &answers, &thresholds);
                     let confidence = confidence_of(&decision, &answers);
-                    debug!(?decision, latency_ms, "reflexo");
+                    record_decision(&stats, &decision, latency_ms, false);
                     if matches!(decision, Decision::Nothing) {
                         return;
                     }
@@ -210,6 +244,40 @@ impl Reflex {
     pub fn end_turn(&self) {
         self.locked.store(false, Ordering::SeqCst);
     }
+}
+
+fn record_decision(
+    stats: &Arc<Mutex<SessionStats>>,
+    decision: &Decision,
+    latency_ms: u32,
+    skipped_judge: bool,
+) {
+    let snapshot = {
+        let mut stats = stats.lock().unwrap_or_else(|e| e.into_inner());
+        match decision {
+            Decision::Act(_) => stats.act += 1,
+            Decision::Nothing => stats.nothing += 1,
+            _ => {
+                debug!(?decision, latency_ms, skipped_judge, "reflexo");
+                return;
+            }
+        }
+        stats.total += 1;
+        stats.total_latency_ms += u64::from(latency_ms);
+        if skipped_judge {
+            stats.skipped_judge += 1;
+        }
+        *stats
+    };
+    debug!(?decision, latency_ms, skipped_judge, "reflexo");
+    info!(
+        total = snapshot.total,
+        act = snapshot.act,
+        nothing = snapshot.nothing,
+        skipped_judge = snapshot.skipped_judge,
+        average_latency_ms = snapshot.average_latency_ms(),
+        "resumo do reflexo na sessão"
+    );
 }
 
 /// Confiança que sustenta a decisão, para telemetria.
@@ -272,6 +340,17 @@ mod tests {
         a
     }
 
+    fn nothing() -> Answers {
+        let mut a = Answers::default();
+        let mut p = BTreeMap::new();
+        p.insert(NONE.to_string(), 0.95);
+        a.answers.insert(
+            "intent".into(),
+            Answer::Choice { choice: NONE.into(), probabilities: p, confidence: 0.95 },
+        );
+        a
+    }
+
     #[tokio::test]
     async fn debounce_junta_fragmentos_e_age_uma_vez_por_turno() {
         let judge = Arc::new(FakeJudge::new());
@@ -316,6 +395,47 @@ mod tests {
         reflex.hear("abre o safari".into(), false);
         tokio::time::sleep(Duration::from_millis(100)).await;
         assert!(judge.calls().is_empty());
+    }
+
+    #[tokio::test]
+    async fn fala_sem_candidato_nao_chama_o_juiz() {
+        let judge = Arc::new(FakeJudge::new());
+        let (reflex, _rx) = Reflex::new(settings(), judge.clone(), eye());
+
+        reflex.hear("que horas são?".into(), false);
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        assert!(judge.calls().is_empty());
+    }
+
+    #[tokio::test]
+    async fn metricas_da_sessao_contam_act_nothing_latencia_e_atalhos() {
+        let judge = Arc::new(FakeJudge::with_delay(Duration::from_millis(5)));
+        judge.push(open_safari());
+        judge.push(nothing());
+        let (reflex, mut rx) = Reflex::new(settings(), judge, eye());
+
+        reflex.hear("que horas são?".into(), false);
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let stats = reflex.stats();
+        assert_eq!(stats.total, 1);
+        assert_eq!(stats.act, 0);
+        assert_eq!(stats.nothing, 1);
+        assert_eq!(stats.skipped_judge, 1);
+
+        reflex.hear("abre o safari".into(), false);
+        tokio::time::timeout(Duration::from_millis(500), rx.recv()).await.unwrap().unwrap();
+        reflex.end_turn();
+        reflex.hear("safari".into(), false);
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        let stats = reflex.stats();
+        assert_eq!(stats.total, 3);
+        assert_eq!(stats.act, 1);
+        assert_eq!(stats.nothing, 2);
+        assert_eq!(stats.skipped_judge, 1);
+        assert!(stats.total_latency_ms > 0);
+        assert!(stats.average_latency_ms() > 0);
     }
 
     #[tokio::test]

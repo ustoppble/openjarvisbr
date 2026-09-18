@@ -44,8 +44,18 @@ pub fn normalize(text: &str) -> String {
     out.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-/// Apps rodando sempre entram; instalados entram se algum token da fala (≥3
-/// letras) for prefixo de alguma palavra do nome. Teto `MAX_CANDIDATES`.
+fn name_matches(tokens: &[String], name: &str) -> bool {
+    let normalized = normalize(name);
+    tokens.iter().any(|token| {
+        normalized
+            .split(' ')
+            .any(|word| word.starts_with(token.as_str()))
+    })
+}
+
+/// Apps rodando têm prioridade sobre os demais instalados, mas só entram se
+/// algum token da fala (≥3 letras) for prefixo de uma palavra do nome. Teto
+/// `MAX_CANDIDATES`.
 pub fn app_candidates(heard: &str, inv: &Inventory) -> Vec<String> {
     let tokens: Vec<String> = normalize(heard)
         .split(' ')
@@ -55,7 +65,7 @@ pub fn app_candidates(heard: &str, inv: &Inventory) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     let mut seen: BTreeSet<String> = BTreeSet::new();
     for app in &inv.running_apps {
-        if seen.insert(app.name.clone()) {
+        if name_matches(&tokens, &app.name) && seen.insert(app.name.clone()) {
             out.push(app.name.clone());
         }
     }
@@ -66,14 +76,22 @@ pub fn app_candidates(heard: &str, inv: &Inventory) -> Vec<String> {
         if seen.contains(&app.name) {
             continue;
         }
-        let name = normalize(&app.name);
-        let hit = tokens.iter().any(|t| name.split(' ').any(|w| w.starts_with(t.as_str())));
-        if hit && seen.insert(app.name.clone()) {
+        if name_matches(&tokens, &app.name) && seen.insert(app.name.clone()) {
             out.push(app.name.clone());
         }
     }
     out.truncate(MAX_CANDIDATES);
     out
+}
+
+/// Sites cujo nome compartilha um token/prefixo (≥3 letras) com a fala.
+pub fn site_candidates<'a>(heard: &str, inv: &'a Inventory) -> Vec<&'a crate::config::SiteConfig> {
+    let tokens = tokens(heard);
+    inv.sites
+        .iter()
+        .filter(|site| name_matches(&tokens, &site.name))
+        .take(MAX_CANDIDATES)
+        .collect()
 }
 
 /// Tokens da fala com ≥3 letras, normalizados.
@@ -85,11 +103,25 @@ fn tokens(text: &str) -> Vec<String> {
         .collect()
 }
 
+/// Palavras de ligação não identificam uma ação aprendida; sem este filtro,
+/// qualquer frase com "que" reaproveitaria ações sem relação com o pedido.
+fn learned_tokens(text: &str) -> Vec<String> {
+    const STOPWORDS: &[&str] = &[
+        "que", "com", "sem", "por", "para", "pra", "pro", "uma", "uns", "umas", "dos", "das",
+        "nos", "nas", "isso", "esse", "essa", "estes", "estas", "aqui", "agora", "favor", "hora",
+        "horas", "sao",
+    ];
+    tokens(text)
+        .into_iter()
+        .filter(|token| !STOPWORDS.contains(&token.as_str()))
+        .collect()
+}
+
 /// Ações aprendidas cuja frase compartilha ≥1 token (≥3 letras) com a fala,
 /// as `MAX_LEARNED` de maior `count`. O `usize` é o índice em `inv.learned`
 /// (estável: vira a chave `l{i}` da pergunta).
 pub fn learned_candidates<'a>(heard: &str, inv: &'a Inventory) -> Vec<(usize, &'a LearnedAction)> {
-    let heard_tokens: BTreeSet<String> = tokens(heard).into_iter().collect();
+    let heard_tokens: BTreeSet<String> = learned_tokens(heard).into_iter().collect();
     if heard_tokens.is_empty() {
         return Vec::new();
     }
@@ -97,7 +129,11 @@ pub fn learned_candidates<'a>(heard: &str, inv: &'a Inventory) -> Vec<(usize, &'
         .learned
         .iter()
         .enumerate()
-        .filter(|(_, a)| tokens(&a.phrase).iter().any(|t| heard_tokens.contains(t)))
+        .filter(|(_, a)| {
+            learned_tokens(&a.phrase)
+                .iter()
+                .any(|t| heard_tokens.contains(t))
+        })
         .collect();
     out.sort_by_key(|(_, a)| std::cmp::Reverse(a.count));
     out.truncate(MAX_LEARNED);
@@ -176,10 +212,15 @@ pub fn build_questions(s: &Situation) -> Option<Questions> {
     if s.turn_locked {
         return if s.pending_confirm { Some(q) } else { None };
     }
+    let apps = app_candidates(s.heard, s.inventory);
+    let sites = site_candidates(s.heard, s.inventory);
+    let learned = learned_candidates(s.heard, s.inventory);
+    if !s.pending_confirm && apps.is_empty() && sites.is_empty() && learned.is_empty() {
+        return None;
+    }
     q.insert("intent", Question::choice(
         "O que o usuário está pedindo em `state`? Escolha `none` se não for um pedido claro de ação.",
         INTENT_CRITERIA.iter().copied()));
-    let apps = app_candidates(s.heard, s.inventory);
     if !apps.is_empty() {
         let mut criteria: Vec<(String, String)> = apps
             .iter()
@@ -188,18 +229,14 @@ pub fn build_questions(s: &Situation) -> Option<Questions> {
         criteria.push((NONE.into(), "nenhum destes aplicativos".into()));
         q.insert("app", Question::choice("Se for para abrir um aplicativo, qual?", criteria));
     }
-    if !s.inventory.sites.is_empty() {
-        let mut criteria: Vec<(String, String)> = s
-            .inventory
-            .sites
+    if !sites.is_empty() {
+        let mut criteria: Vec<(String, String)> = sites
             .iter()
-            .take(MAX_CANDIDATES)
             .map(|site| (site.name.clone(), format!("o site {} ({})", site.name, site.url)))
             .collect();
         criteria.push((NONE.into(), "nenhum destes sites".into()));
         q.insert("site", Question::choice("Se for para abrir um site, qual?", criteria));
     }
-    let learned = learned_candidates(s.heard, s.inventory);
     if !learned.is_empty() {
         let mut criteria: Vec<(String, String)> = learned
             .iter()
@@ -354,14 +391,13 @@ mod tests {
     }
 
     #[test]
-    fn candidatos_rodando_sempre_entram_e_instalados_por_prefixo() {
+    fn candidatos_de_app_exigem_token_da_fala_e_respeitam_estado_rodando() {
         let i = inv(&["Safari", "Spotify", "Zed", "Slack"], &["Finder", "Zed"]);
         let c = app_candidates("abre o spo", &i);
-        assert!(c.contains(&"Finder".to_string()));
-        assert!(c.contains(&"Zed".to_string()));
-        assert!(c.contains(&"Spotify".to_string()));
-        assert!(!c.contains(&"Slack".to_string()));
-        assert!(!c.contains(&"Safari".to_string()));
+        assert_eq!(c, vec!["Spotify".to_string()]);
+
+        let running = app_candidates("volta pro finder", &i);
+        assert_eq!(running, vec!["Finder".to_string()]);
     }
 
     #[test]
@@ -413,16 +449,13 @@ mod tests {
         match &q.0["app"] {
             Question::Choice { criteria, .. } => {
                 assert!(criteria.contains_key("Spotify"));
-                assert!(criteria.contains_key("Finder"));
                 assert!(criteria.contains_key(NONE));
+                assert!(!criteria.contains_key("Finder"));
                 assert!(!criteria.contains_key("Safari"));
             }
             _ => panic!("app deve ser choice"),
         }
-        match &q.0["site"] {
-            Question::Choice { criteria, .. } => assert!(criteria.contains_key("YouTube")),
-            _ => panic!(),
-        }
+        assert!(!q.0.contains_key("site"));
         match &q.0["intent"] {
             Question::Choice { criteria, .. } => {
                 for k in ["open_app", "open_site", "media", "volume", NONE] { assert!(criteria.contains_key(k), "{k}"); }
@@ -435,9 +468,27 @@ mod tests {
     fn sem_candidato_de_app_nao_pergunta_app() {
         let i = inv(&["Safari"], &[]);
         let s = Situation { heard: "aumenta o volume", inventory: &i, pending_confirm: false, turn_locked: false };
-        let q = build_questions(&s).unwrap();
-        assert!(!q.0.contains_key("app"));
-        assert!(q.0.contains_key("volume"));
+        assert!(build_questions(&s).is_none());
+    }
+
+    #[test]
+    fn site_so_vira_candidato_quando_a_fala_menciona_o_nome() {
+        let i = inv(&[], &[]);
+        let conversa = Situation {
+            heard: "que horas são?",
+            inventory: &i,
+            pending_confirm: false,
+            turn_locked: false,
+        };
+        assert!(build_questions(&conversa).is_none());
+
+        let pedido = Situation {
+            heard: "abre o youtube",
+            inventory: &i,
+            pending_confirm: false,
+            turn_locked: false,
+        };
+        assert!(build_questions(&pedido).unwrap().0.contains_key("site"));
     }
 
     use crate::reflex::questions::Answer;
@@ -636,6 +687,18 @@ mod tests {
     }
 
     #[test]
+    fn palavras_de_conversa_nao_criam_candidata_aprendida() {
+        let i = inv_learned(vec![learned(
+            "confere as horas e diz se são certas",
+            "media.control",
+            json!({"action": "play"}),
+            1,
+        )]);
+
+        assert!(learned_candidates("que horas são?", &i).is_empty());
+    }
+
+    #[test]
     fn pergunta_learned_so_com_candidatas_e_com_chaves_estaveis() {
         let i = inv_learned(vec![
             learned("toca a playlist", "media.control", json!({"action": "play"}), 1),
@@ -658,7 +721,7 @@ mod tests {
         }
         // sem candidata: sem pergunta
         let s2 = Situation { heard: "aumenta o volume", inventory: &i, pending_confirm: false, turn_locked: false };
-        assert!(!build_questions(&s2).unwrap().0.contains_key("learned"));
+        assert!(build_questions(&s2).is_none());
     }
 
     #[test]
