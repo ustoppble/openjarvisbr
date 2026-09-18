@@ -5,6 +5,7 @@
 use std::collections::BTreeSet;
 
 use super::eye::Inventory;
+use super::questions::{Question, Questions};
 
 pub const MAX_CANDIDATES: usize = 40;
 pub const NONE: &str = "none";
@@ -66,6 +67,89 @@ pub fn app_candidates(heard: &str, inv: &Inventory) -> Vec<String> {
     out
 }
 
+pub struct Situation<'a> {
+    pub heard: &'a str,
+    pub inventory: &'a Inventory,
+    /// Há chamada `Confirm` esperando resposta.
+    pub pending_confirm: bool,
+    /// O reflexo já agiu neste turno: só confirmação interessa.
+    pub turn_locked: bool,
+}
+
+const INTENT_CRITERIA: &[(&str, &str)] = &[
+    ("open_app", "O usuário quer abrir ou ir para um aplicativo do computador."),
+    ("open_site", "O usuário quer abrir um site ou página na internet."),
+    ("media", "O usuário quer controlar a música ou o vídeo: tocar, pausar, próxima, anterior."),
+    ("volume", "O usuário quer mudar o volume do computador ou silenciar."),
+    (NONE, "Não é um pedido de ação no computador: conversa, pergunta, outra coisa."),
+];
+
+const MEDIA_CRITERIA: &[(&str, &str)] = &[
+    ("play", "tocar / continuar"),
+    ("pause", "pausar / parar"),
+    ("next", "próxima faixa"),
+    ("previous", "faixa anterior / voltar"),
+    (NONE, "nenhuma destas"),
+];
+
+const VOLUME_CRITERIA: &[(&str, &str)] = &[
+    ("up", "aumentar o volume"),
+    ("down", "diminuir o volume"),
+    ("mute", "silenciar / mudo"),
+    ("unmute", "tirar do mudo / voltar o som"),
+    ("set", "colocar o volume num valor específico"),
+    (NONE, "nenhuma destas"),
+];
+
+fn confirmation_questions(q: &mut Questions) {
+    q.insert("approve", Question::noul(
+        "O usuário está dizendo SIM: aprovando, autorizando ou mandando seguir com o pedido pendente.", None));
+    q.insert("deny", Question::noul(
+        "O usuário está dizendo NÃO: recusando, cancelando ou mandando parar o pedido pendente.", None));
+}
+
+/// Perguntas para esta situação. `None` = nada a perguntar.
+pub fn build_questions(s: &Situation) -> Option<Questions> {
+    if s.heard.trim().is_empty() {
+        return None;
+    }
+    let mut q = Questions::default();
+    q.insert("always", Question::noul(
+        "O usuário pede para o assistente nunca mais perguntar antes de fazer isso (liberar para sempre).", None));
+    if s.pending_confirm {
+        confirmation_questions(&mut q);
+    }
+    if s.turn_locked {
+        return if s.pending_confirm { Some(q) } else { None };
+    }
+    q.insert("intent", Question::choice(
+        "O que o usuário está pedindo em `state`? Escolha `none` se não for um pedido claro de ação.",
+        INTENT_CRITERIA.iter().copied()));
+    let apps = app_candidates(s.heard, s.inventory);
+    if !apps.is_empty() {
+        let mut criteria: Vec<(String, String)> = apps
+            .iter()
+            .map(|name| (name.clone(), format!("o aplicativo {name}")))
+            .collect();
+        criteria.push((NONE.into(), "nenhum destes aplicativos".into()));
+        q.insert("app", Question::choice("Se for para abrir um aplicativo, qual?", criteria));
+    }
+    if !s.inventory.sites.is_empty() {
+        let mut criteria: Vec<(String, String)> = s
+            .inventory
+            .sites
+            .iter()
+            .take(MAX_CANDIDATES)
+            .map(|site| (site.name.clone(), format!("o site {} ({})", site.name, site.url)))
+            .collect();
+        criteria.push((NONE.into(), "nenhum destes sites".into()));
+        q.insert("site", Question::choice("Se for para abrir um site, qual?", criteria));
+    }
+    q.insert("media", Question::choice("Se for controle de mídia, qual ação?", MEDIA_CRITERIA.iter().copied()));
+    q.insert("volume", Question::choice("Se for volume, qual ação?", VOLUME_CRITERIA.iter().copied()));
+    Some(q)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -109,5 +193,66 @@ mod tests {
         let i = inv(&["Zed", "Zoom"], &[]);
         assert!(app_candidates("ze", &i).is_empty());
         assert_eq!(app_candidates("zed", &i), vec!["Zed".to_string()]);
+    }
+
+    #[test]
+    fn fala_vazia_nao_pergunta() {
+        let i = inv(&["Safari"], &[]);
+        let s = Situation { heard: "  ", inventory: &i, pending_confirm: false, turn_locked: false };
+        assert!(build_questions(&s).is_none());
+    }
+
+    #[test]
+    fn turno_travado_so_pergunta_confirmacao() {
+        let i = inv(&["Safari"], &[]);
+        let s = Situation { heard: "sim pode", inventory: &i, pending_confirm: true, turn_locked: true };
+        let q = build_questions(&s).unwrap();
+        let ids: Vec<&String> = q.0.keys().collect();
+        assert_eq!(ids, vec!["always", "approve", "deny"]);
+    }
+
+    #[test]
+    fn turno_travado_sem_pendente_nao_pergunta() {
+        let i = inv(&["Safari"], &[]);
+        let s = Situation { heard: "sim", inventory: &i, pending_confirm: false, turn_locked: true };
+        assert!(build_questions(&s).is_none());
+    }
+
+    #[test]
+    fn perguntas_completas_incluem_candidatos_e_none() {
+        let i = inv(&["Safari", "Spotify"], &["Finder"]);
+        let s = Situation { heard: "abre o spotify", inventory: &i, pending_confirm: false, turn_locked: false };
+        let q = build_questions(&s).unwrap();
+        assert!(q.0.contains_key("intent"));
+        assert!(q.0.contains_key("always"));
+        assert!(!q.0.contains_key("approve"));
+        match &q.0["app"] {
+            Question::Choice { criteria, .. } => {
+                assert!(criteria.contains_key("Spotify"));
+                assert!(criteria.contains_key("Finder"));
+                assert!(criteria.contains_key(NONE));
+                assert!(!criteria.contains_key("Safari"));
+            }
+            _ => panic!("app deve ser choice"),
+        }
+        match &q.0["site"] {
+            Question::Choice { criteria, .. } => assert!(criteria.contains_key("YouTube")),
+            _ => panic!(),
+        }
+        match &q.0["intent"] {
+            Question::Choice { criteria, .. } => {
+                for k in ["open_app", "open_site", "media", "volume", NONE] { assert!(criteria.contains_key(k), "{k}"); }
+            }
+            _ => panic!(),
+        }
+    }
+
+    #[test]
+    fn sem_candidato_de_app_nao_pergunta_app() {
+        let i = inv(&["Safari"], &[]);
+        let s = Situation { heard: "aumenta o volume", inventory: &i, pending_confirm: false, turn_locked: false };
+        let q = build_questions(&s).unwrap();
+        assert!(!q.0.contains_key("app"));
+        assert!(q.0.contains_key("volume"));
     }
 }
