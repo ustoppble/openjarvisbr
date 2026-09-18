@@ -400,6 +400,9 @@ fn handle_engine_event(app: &AppHandle, event: EngineEvent) {
         event @ (EngineEvent::ToolRequested { .. }
         | EngineEvent::ToolConfirmNeeded { .. }
         | EngineEvent::ToolResult { .. }) => tool_events::emit(app, &event),
+        event @ (EngineEvent::ReflexActed { .. } | EngineEvent::ReflexConfirmed { .. }) => {
+            tool_events::emit_reflex(app, &event)
+        }
         EngineEvent::Error { kind, message } => {
             let _ = app.emit(
                 "engine://error",
@@ -443,6 +446,7 @@ fn build_engine_config(api_key: String, greeting: Option<String>) -> EngineConfi
         mcp_servers: settings.mcp_servers,
         full_access: settings.full_access,
         always_allow: settings.always_allow,
+        reflex: settings.reflex.clone(),
     }
 }
 
@@ -540,6 +544,44 @@ fn reconnect(app: AppHandle) {
     do_reconnect(&app);
 }
 
+/// Estado da aba Reflexo. A chave nunca sai daqui: só `has_key`.
+#[derive(serde::Serialize)]
+struct ReflexSettingsPayload {
+    enabled: bool,
+    has_key: bool,
+    act_threshold: f32,
+    sites: Vec<openjarvisbr_core::config::SiteConfig>,
+}
+
+#[tauri::command]
+fn get_reflex_settings() -> ReflexSettingsPayload {
+    let r = openjarvisbr_core::config::load_reflex();
+    ReflexSettingsPayload {
+        enabled: r.enabled,
+        has_key: r.api_key.is_some(),
+        act_threshold: r.act_threshold,
+        sites: r.sites,
+    }
+}
+
+#[tauri::command]
+fn set_reflex_enabled(on: bool) -> Result<(), String> {
+    openjarvisbr_core::config::save_reflex_enabled(on).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn set_typesafe_api_key(key: String) -> Result<(), String> {
+    openjarvisbr_core::config::save_typesafe_api_key(&key).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn save_reflex_sites(
+    sites: Vec<openjarvisbr_core::config::SiteConfig>,
+    act_threshold: f32,
+) -> Result<(), String> {
+    openjarvisbr_core::config::save_reflex_sites(&sites, act_threshold).map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 fn quit(app: AppHandle) {
     app.exit(0);
@@ -601,7 +643,11 @@ fn main() {
             request_permissions,
             reveal_app,
             open_privacy_pane,
-            emit_tool_mock
+            emit_tool_mock,
+            get_reflex_settings,
+            set_reflex_enabled,
+            set_typesafe_api_key,
+            save_reflex_sites
         ])
         .setup(|app| {
             let handle = app.handle().clone();

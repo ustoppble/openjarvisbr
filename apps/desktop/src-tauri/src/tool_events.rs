@@ -45,3 +45,45 @@ pub fn emit(app: &AppHandle, event: &EngineEvent) {
         let _ = app.emit(TOOL_EVENT, payload);
     }
 }
+
+/// Evento do reflexo para o overlay: `engine://reflex` com
+/// `{ kind: "acted" | "confirmed", name?, summary?, latency_ms?, approve? }`
+/// (contrato da Task 18, consumido por `overlay/tools.ts`).
+pub(crate) const REFLEX_EVENT: &str = "engine://reflex";
+
+#[derive(serde::Serialize, Clone)]
+pub(crate) struct ReflexPayload<'a> {
+    pub(crate) kind: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) name: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) summary: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) latency_ms: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) approve: Option<bool>,
+}
+
+/// Emite `engine://reflex`. A confiança do Jev não vai ao overlay.
+pub(crate) fn emit_reflex(app: &AppHandle, event: &EngineEvent) {
+    let payload = match event {
+        EngineEvent::ReflexActed {
+            call, latency_ms, ..
+        } => ReflexPayload {
+            kind: "acted",
+            name: Some(&call.name),
+            summary: Some(call_summary(call)),
+            latency_ms: Some(*latency_ms),
+            approve: None,
+        },
+        EngineEvent::ReflexConfirmed { approve, .. } => ReflexPayload {
+            kind: "confirmed",
+            name: None,
+            summary: None,
+            latency_ms: None,
+            approve: Some(*approve),
+        },
+        _ => return,
+    };
+    let _ = app.emit(REFLEX_EVENT, payload);
+}

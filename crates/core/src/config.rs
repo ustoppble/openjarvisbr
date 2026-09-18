@@ -600,6 +600,35 @@ pub fn save_typesafe_api_key(key: &str) -> Result<(), ConfigError> {
     })
 }
 
+/// Grava `[[reflex.sites]]` e `[reflex].act_threshold` (limitado a 0.5..=1.0),
+/// preservando o resto do arquivo. Lista vazia remove os sites.
+pub fn save_reflex_sites(sites: &[SiteConfig], act_threshold: f32) -> Result<(), ConfigError> {
+    let sites: toml::Value = toml::Value::try_from(sites.to_vec()).map_err(ConfigError::SerializeFile)?;
+    let threshold = act_threshold.clamp(0.5, 1.0);
+    edit_table(|table| {
+        let entry = table
+            .entry("reflex")
+            .or_insert_with(|| toml::Value::Table(toml::Table::new()));
+        if !entry.is_table() {
+            *entry = toml::Value::Table(toml::Table::new());
+        }
+        if let Some(section) = entry.as_table_mut() {
+            match &sites {
+                toml::Value::Array(items) if items.is_empty() => {
+                    section.remove("sites");
+                }
+                _ => {
+                    section.insert("sites".to_string(), sites.clone());
+                }
+            }
+            section.insert(
+                "act_threshold".to_string(),
+                toml::Value::Float(f64::from(threshold)),
+            );
+        }
+    })
+}
+
 /// Troca uma chave de uma seção (`[section]`) preservando literalmente o
 /// resto do arquivo (inclusive seções que o core não modela).
 fn save_section_value(section: &str, key: &str, value: toml::Value) -> Result<(), ConfigError> {
@@ -965,6 +994,38 @@ mod tests {
         let msg = ConfigError::MissingKey.to_string();
         assert!(msg.contains("GEMINI_API_KEY"));
         assert!(msg.contains("config.toml"));
+    }
+
+    #[test]
+    fn save_reflex_sites_grava_lista_e_limiar_preservando_o_resto() {
+        let home = TempHome::new();
+        let path = config_path().unwrap();
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &path,
+            "typesafe_api_key = \"k\"\n[reflex]\nenabled = true\n[outra]\nx = 1\n",
+        )
+        .unwrap();
+
+        let sites = vec![SiteConfig {
+            name: "YouTube".into(),
+            url: "https://youtube.com".into(),
+        }];
+        save_reflex_sites(&sites, 1.7).expect("grava sites");
+
+        let r = load_reflex();
+        assert!(r.enabled, "enabled preservado");
+        assert_eq!(r.sites, sites);
+        assert!((r.act_threshold - 1.0).abs() < f32::EPSILON, "limiar limitado a 1.0");
+        let raw = std::fs::read_to_string(&path).unwrap();
+        assert!(raw.contains("[outra]"), "seção alheia sobrevive");
+
+        // Lista vazia remove os sites, sem tocar no resto.
+        save_reflex_sites(&[], 0.9).expect("remove sites");
+        let r = load_reflex();
+        assert!(r.sites.is_empty());
+        assert!((r.act_threshold - 0.9).abs() < 1e-6);
+        drop(home);
     }
 
     #[test]
