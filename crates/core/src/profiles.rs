@@ -56,7 +56,7 @@ pub fn builtin_profiles(user_name: Option<&str>) -> Vec<Profile> {
             system_prompt: base.clone(),
             voice: "Puck".to_string(),
             fx_amount: 0.35,
-            tools: globs(&["*"]),
+            tools: globs(&["*", "browser.*"]),
         },
         Profile {
             id: "english_teacher".to_string(),
@@ -285,7 +285,7 @@ mod tests {
     #[test]
     fn builtin_tool_allow_lists_follow_spec() {
         let tools = |id: &str| resolve_profile(id, None, &[]).tools;
-        assert_eq!(tools("assistant"), ["*"]);
+        assert_eq!(tools("assistant"), ["*", "browser.*"]);
         assert_eq!(tools("pair_programmer"), ["fs.*", "shell.*", "mcp.*"]);
         assert_eq!(
             tools("business_mentor"),

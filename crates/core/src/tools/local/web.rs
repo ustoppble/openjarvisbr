@@ -58,7 +58,7 @@ impl Tool for WebOpen {
 }
 
 /// Só http(s). Sem esquema, assume https.
-fn normalize_url(raw: &str) -> Result<String, ToolError> {
+pub(super) fn normalize_url(raw: &str) -> Result<String, ToolError> {
     let raw = raw.trim();
     if raw.is_empty() || raw.chars().any(|c| c.is_whitespace() || c.is_control()) {
         return Err(ToolError::InvalidArgs(format!("endereço inválido: {raw}")));
@@ -91,7 +91,7 @@ const BROWSER_ALIASES: &[(&str, &str)] = &[
 
 /// `None`/vazio = navegador padrão. Recusa o que pareça flag ou tenha
 /// caractere de controle; apelido conhecido vira o nome oficial.
-fn normalize_browser(raw: Option<&str>) -> Result<Option<String>, ToolError> {
+pub(super) fn normalize_browser(raw: Option<&str>) -> Result<Option<String>, ToolError> {
     let Some(raw) = raw.map(str::trim).filter(|s| !s.is_empty()) else {
         return Ok(None);
     };
@@ -172,6 +172,14 @@ mod tests {
             "a b.com",
         ] {
             assert!(normalize_url(bad).is_err(), "deveria recusar {bad}");
+        }
+    }
+
+    #[test]
+    fn erro_de_url_nao_repete_a_entrada() {
+        for raw in ["nao_repetir_este_valor", "a nao_repetir_este_valor.com"] {
+            let error = normalize_url(raw).unwrap_err().to_string();
+            assert!(!error.contains(raw), "o erro refletiu a URL recebida");
         }
     }
 

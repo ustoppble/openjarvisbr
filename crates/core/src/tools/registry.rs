@@ -166,6 +166,22 @@ mod tests {
     }
 
     #[test]
+    fn local_browser_tools_are_registered() {
+        let mut registry = Registry::new();
+        for tool in crate::tools::local::all(crate::tools::FullAccess::default()) {
+            registry.register(tool);
+        }
+        for name in [
+            "browser.back",
+            "browser.forward",
+            "browser.goto",
+            "browser.search",
+        ] {
+            assert!(registry.get(name).is_some(), "{name} não foi registrado");
+        }
+    }
+
+    #[test]
     fn filter_for_profile_by_globs() {
         let registry = registry(ALL);
         let code = registry.filter_for_profile(&["fs.*", "shell.*", "mcp.*"]);

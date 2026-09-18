@@ -8,11 +8,13 @@ use std::path::{Component, Path, PathBuf};
 use super::{FullAccess, Tool, ToolError};
 
 mod app;
+mod browser;
 mod fs;
 mod shell;
 mod web;
 
 pub use app::AppOpen;
+pub use browser::{BrowserBack, BrowserForward, BrowserGoto, BrowserSearch};
 pub use fs::{FsList, FsRead, FsWrite};
 pub use shell::ShellRun;
 pub use web::WebOpen;
@@ -25,6 +27,10 @@ pub fn all(full_access: FullAccess) -> Vec<Box<dyn Tool>> {
     vec![
         Box::new(AppOpen),
         Box::new(WebOpen),
+        Box::new(BrowserBack),
+        Box::new(BrowserForward),
+        Box::new(BrowserGoto),
+        Box::new(BrowserSearch),
         Box::new(ShellRun::new(home.clone())),
         Box::new(FsRead::with_full_access(home.clone(), full_access.clone())),
         Box::new(FsWrite::with_full_access(home.clone(), full_access.clone())),
@@ -196,7 +202,7 @@ mod tests {
     }
 
     #[test]
-    fn all_tem_os_seis_nomes_e_riscos() {
+    fn all_tem_os_dez_nomes_e_riscos() {
         let specs: Vec<_> = all(FullAccess::default()).iter().map(|t| t.spec()).collect();
         let names: Vec<_> = specs.iter().map(|s| s.name.as_str()).collect();
         assert_eq!(
@@ -204,6 +210,10 @@ mod tests {
             [
                 "app.open",
                 "web.open",
+                "browser.back",
+                "browser.forward",
+                "browser.goto",
+                "browser.search",
                 "shell.run",
                 "fs.read",
                 "fs.write",
