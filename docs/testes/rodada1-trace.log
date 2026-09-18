@@ -1,0 +1,176 @@
+⚠ acesso total ligado: o Jarvis executa comandos e mexe em arquivos sem perguntar
+[2m2026-09-18T19:51:33.347128Z[0m [32m INFO[0m [2mopenjarvisbr_core::mcp[0m[2m:[0m MCP conectado [3mserver[0m[2m=[0moverclock [3mtools[0m[2m=[0m12
+[2m2026-09-18T19:51:38.759709Z[0m [32m INFO[0m [2mopenjarvisbr_core::mcp[0m[2m:[0m MCP conectado [3mserver[0m[2m=[0moverclick [3mtools[0m[2m=[0m34
+[2m2026-09-18T19:51:38.760129Z[0m [32m INFO[0m [2mopenjarvisbr_core::engine[0m[2m:[0m conectando à Live API [3mferramentas[0m[2m=[0m56
+[2m2026-09-18T19:51:38.760300Z[0m [32m INFO[0m [2mopenjarvisbr_core::live::session[0m[2m:[0m conectando na Live API [3mhost[0m[2m=[0m"generativelanguage.googleapis.com"
+[2m2026-09-18T19:51:39.747092Z[0m [34mDEBUG[0m [2mopenjarvisbr_core::live::session[0m[2m:[0m setupComplete recebido [3mhost[0m[2m=[0m"generativelanguage.googleapis.com"
+[2m2026-09-18T19:51:39.941694Z[0m [32m INFO[0m [2mopenjarvisbr_core::engine[0m[2m:[0m reflexo ligado
+[1] > abre o Safari
+[2m2026-09-18T19:51:39.942309Z[0m [34mDEBUG[0m [2mopenjarvisbr_core::engine[0m[2m:[0m usuário disse [3mtexto[0m[2m=[0mabre o Safari [3mvia[0m[2m=[0m"texto"
+[2m2026-09-18T19:51:39.942350Z[0m [34mDEBUG[0m [2mopenjarvisbr_core::live::session[0m[2m:[0m texto de contexto enviado [3mtamanho[0m[2m=[0m13
+[2m2026-09-18T19:51:40.518018Z[0m [34mDEBUG[0m [2mopenjarvisbr_core::reflex[0m[2m:[0m reflexo [3mdecision[0m[2m=[0mAct(ToolCall { id: "reflex-1", name: "app.open", args: Object {"name": String("Safari")} }) [3mlatency_ms[0m[2m=[0m455
+[2m2026-09-18T19:51:40.518072Z[0m [32m INFO[0m [2mopenjarvisbr_core::engine[0m[2m:[0m reflexo agiu [3mferramenta[0m[2m=[0mapp.open [3mms[0m[2m=[0m455
+  [reflexo 455 ms] app.open
+
+  [tool] app.open: Safari
+[2m2026-09-18T19:51:40.518131Z[0m [34mDEBUG[0m [2mopenjarvisbr_core::live::session[0m[2m:[0m texto de contexto enviado [3mtamanho[0m[2m=[0m139
+[2m2026-09-18T19:51:40.560090Z[0m [32m INFO[0m [2mopenjarvisbr_core::engine[0m[2m:[0m tool concluída [3mid[0m[2m=[0mreflex-1 [3mferramenta[0m[2m=[0mapp.open [3morigem[0m[2m=[0m"reflexo" [3mms[0m[2m=[0m41 [3mresultado[0m[2m=[0m{"opened":"Safari"}
+  [ok] app.open: {"opened":"Safari"}
+[2m2026-09-18T19:51:40.630644Z[0m [32m INFO[0m [2mopenjarvisbr_core::engine[0m[2m:[0m já executada pelo reflexo; não repete [3mferramenta[0m[2m=[0mapp.open
+
+  [tool] app.open: Safari
+  [ok] app.open: {"nota":"o reflexo acabou de executar exatamente esta ação; use este resultado e não chame de novo","resultado":{"opened":"Safari"},"status":"já executada"}
+[2m2026-09-18T19:51:40.630705Z[0m [34mDEBUG[0m [2mopenjarvisbr_core::live::session[0m[2m:[0m resposta de ferramenta enviada [3mquantidade[0m[2m=[0m1
+[2m2026-09-18T19:51:40.645885Z[0m [34mDEBUG[0m [2mopenjarvisbr_core::engine[0m[2m:[0m turno do modelo concluído
+
+[2m2026-09-18T19:51:41.334442Z[0m [34mDEBUG[0m [2mopenjarvisbr_core::engine[0m[2m:[0m modelo disse [3mtexto[0m[2m=[0mO Safari 
+[2m2026-09-18T19:51:41.618438Z[0m [34mDEBUG[0m [2mopenjarvisbr_core::engine[0m[2m:[0m modelo disse [3mtexto[0m[2m=[0mfoi aberto.
+[2m2026-09-18T19:51:43.003438Z[0m [34mDEBUG[0m [2mopenjarvisbr_core::engine[0m[2m:[0m turno do modelo concluído
+[2m2026-09-18T19:51:43.655439Z[0m [34mDEBUG[0m [2mopenjarvisbr_core::engine[0m[2m:[0m modelo disse [3mtexto[0m[2m=[0mO Safari 
+[2m2026-09-18T19:51:43.913945Z[0m [34mDEBUG[0m [2mopenjarvisbr_core::engine[0m[2m:[0m modelo disse [3mtexto[0m[2m=[0mfoi aberto.
+[2m2026-09-18T19:51:43.913968Z[0m [33m WARN[0m [2mopenjarvisbr_core::engine[0m[2m:[0m modelo repetiu a fala anterior; descartada [3mfala[0m[2m=[0mO Safari foi aberto.
+[3] > abre o google.com no Safari
+O Safari foi aberto.
+[2m2026-09-18T19:51:44.149851Z[0m [34mDEBUG[0m [2mopenjarvisbr_core::engine[0m[2m:[0m usuário disse [3mtexto[0m[2m=[0mabre o google.com no Safari [3mvia[0m[2m=[0m"texto"
+[2m2026-09-18T19:51:44.149926Z[0m [34mDEBUG[0m [2mopenjarvisbr_core::live::session[0m[2m:[0m texto de contexto enviado [3mtamanho[0m[2m=[0m27
+[2m2026-09-18T19:51:44.318083Z[0m [34mDEBUG[0m [2mopenjarvisbr_core::engine[0m[2m:[0m turno do modelo concluído
+[2m2026-09-18T19:51:44.688916Z[0m [34mDEBUG[0m [2mopenjarvisbr_core::reflex[0m[2m:[0m reflexo [3mdecision[0m[2m=[0mNothing [3mlatency_ms[0m[2m=[0m417
+[2m2026-09-18T19:51:44.785487Z[0m [32m INFO[0m [2mopenjarvisbr_core::engine[0m[2m:[0m tool pedida pelo modelo [3mid[0m[2m=[0mcall_171675 [3mferramenta[0m[2m=[0mweb.open [3mrisco[0m[2m=[0mSafe [3mpedido[0m[2m=[0mweb.open: browser=Safari, url=google.com
+[2m2026-09-18T19:51:44.804798Z[0m [34mDEBUG[0m [2mopenjarvisbr_core::engine[0m[2m:[0m turno do modelo concluído
+[2m2026-09-18T19:51:44.827200Z[0m [32m INFO[0m [2mopenjarvisbr_core::engine[0m[2m:[0m tool concluída [3mid[0m[2m=[0mcall_171675 [3mferramenta[0m[2m=[0mweb.open [3morigem[0m[2m=[0m"modelo" [3mms[0m[2m=[0m41 [3mresultado[0m[2m=[0m{"browser":"Safari","opened":"https://google.com"}
+[2m2026-09-18T19:51:44.827272Z[0m [34mDEBUG[0m [2mopenjarvisbr_core::live::session[0m[2m:[0m resposta de ferramenta enviada [3mquantidade[0m[2m=[0m1
+[2m2026-09-18T19:51:45.426124Z[0m [32m INFO[0m [2mopenjarvisbr_core::engine[0m[2m:[0m tool pedida pelo modelo [3mid[0m[2m=[0mcall_171680 [3mferramenta[0m[2m=[0mweb.open [3mrisco[0m[2m=[0mSafe [3mpedido[0m[2m=[0mweb.open: browser=Safari, url=google.com
+[2m2026-09-18T19:51:45.443489Z[0m [34mDEBUG[0m [2mopenjarvisbr_core::engine[0m[2m:[0m turno do modelo concluído
+[2m2026-09-18T19:51:45.465328Z[0m [32m INFO[0m [2mopenjarvisbr_core::engine[0m[2m:[0m tool concluída [3mid[0m[2m=[0mcall_171680 [3mferramenta[0m[2m=[0mweb.open [3morigem[0m[2m=[0m"modelo" [3mms[0m[2m=[0m39 [3mresultado[0m[2m=[0m{"browser":"Safari","opened":"https://google.com"}
+[2m2026-09-18T19:51:45.465400Z[0m [34mDEBUG[0m [2mopenjarvisbr_core::live::session[0m[2m:[0m resposta de ferramenta enviada [3mquantidade[0m[2m=[0m1
+[2m2026-09-18T19:51:46.552919Z[0m [34mDEBUG[0m [2mopenjarvisbr_core::engine[0m[2m:[0m modelo disse [3mtexto[0m[2m=[0mO Google já está 
+[2m2026-09-18T19:51:46.844330Z[0m [34mDEBUG[0m [2mopenjarvisbr_core::engine[0m[2m:[0m modelo disse [3mtexto[0m[2m=[0maberto no Safari.
+[5] > abre o Chrome
+O Safari 
+[2m2026-09-18T19:51:47.653449Z[0m [34mDEBUG[0m [2mopenjarvisbr_core::engine[0m[2m:[0m usuário disse [3mtexto[0m[2m=[0mabre o Chrome [3mvia[0m[2m=[0m"texto"
+[2m2026-09-18T19:51:47.653590Z[0m [34mDEBUG[0m [2mopenjarvisbr_core::live::session[0m[2m:[0m texto de contexto enviado [3mtamanho[0m[2m=[0m13
+[2m2026-09-18T19:51:47.820492Z[0m [34mDEBUG[0m [2mopenjarvisbr_core::engine[0m[2m:[0m turno do modelo concluído
+[2m2026-09-18T19:51:48.134498Z[0m [34mDEBUG[0m [2mopenjarvisbr_core::reflex[0m[2m:[0m reflexo [3mdecision[0m[2m=[0mAct(ToolCall { id: "reflex-2", name: "app.open", args: Object {"name": String("Google Chrome")} }) [3mlatency_ms[0m[2m=[0m359
+[2m2026-09-18T19:51:48.134553Z[0m [32m INFO[0m [2mopenjarvisbr_core::engine[0m[2m:[0m reflexo agiu [3mferramenta[0m[2m=[0mapp.open [3mms[0m[2m=[0m359
+[2m2026-09-18T19:51:48.134607Z[0m [34mDEBUG[0m [2mopenjarvisbr_core::live::session[0m[2m:[0m texto de contexto enviado [3mtamanho[0m[2m=[0m146
+[2m2026-09-18T19:51:48.173057Z[0m [32m INFO[0m [2mopenjarvisbr_core::engine[0m[2m:[0m tool concluída [3mid[0m[2m=[0mreflex-2 [3mferramenta[0m[2m=[0mapp.open [3morigem[0m[2m=[0m"reflexo" [3mms[0m[2m=[0m38 [3mresultado[0m[2m=[0m{"opened":"Google Chrome"}
+[2m2026-09-18T19:51:49.287738Z[0m [34mDEBUG[0m [2mopenjarvisbr_core::engine[0m[2m:[0m modelo disse [3mtexto[0m[2m=[0mO Google Chrome 
+[2m2026-09-18T19:51:49.575111Z[0m [34mDEBUG[0m [2mopenjarvisbr_core::engine[0m[2m:[0m modelo disse [3mtexto[0m[2m=[0mfoi aberto.
+[7] > abre o youtube no Chrome
+
+[2m2026-09-18T19:51:51.157083Z[0m [34mDEBUG[0m [2mopenjarvisbr_core::engine[0m[2m:[0m usuário disse [3mtexto[0m[2m=[0mabre o youtube no Chrome [3mvia[0m[2m=[0m"texto"
+[2m2026-09-18T19:51:51.157159Z[0m [34mDEBUG[0m [2mopenjarvisbr_core::live::session[0m[2m:[0m texto de contexto enviado [3mtamanho[0m[2m=[0m24
+[2m2026-09-18T19:51:51.232200Z[0m [34mDEBUG[0m [2mopenjarvisbr_core::engine[0m[2m:[0m turno do modelo concluído
+[2m2026-09-18T19:51:51.613715Z[0m [34mDEBUG[0m [2mopenjarvisbr_core::reflex[0m[2m:[0m reflexo [3mdecision[0m[2m=[0mNothing [3mlatency_ms[0m[2m=[0m334
+[2m2026-09-18T19:51:51.835092Z[0m [32m INFO[0m [2mopenjarvisbr_core::engine[0m[2m:[0m tool pedida pelo modelo [3mid[0m[2m=[0mcall_171757 [3mferramenta[0m[2m=[0mweb.open [3mrisco[0m[2m=[0mSafe [3mpedido[0m[2m=[0mweb.open: browser=Chrome, url=youtube.com
+[2m2026-09-18T19:51:51.850275Z[0m [34mDEBUG[0m [2mopenjarvisbr_core::engine[0m[2m:[0m turno do modelo concluído
+[2m2026-09-18T19:51:51.871105Z[0m [32m INFO[0m [2mopenjarvisbr_core::engine[0m[2m:[0m tool concluída [3mid[0m[2m=[0mcall_171757 [3mferramenta[0m[2m=[0mweb.open [3morigem[0m[2m=[0m"modelo" [3mms[0m[2m=[0m35 [3mresultado[0m[2m=[0m{"browser":"Google Chrome","opened":"https://youtube.com"}
+[2m2026-09-18T19:51:51.871183Z[0m [34mDEBUG[0m [2mopenjarvisbr_core::live::session[0m[2m:[0m resposta de ferramenta enviada [3mquantidade[0m[2m=[0m1
+[2m2026-09-18T19:51:52.487529Z[0m [32m INFO[0m [2mopenjarvisbr_core::engine[0m[2m:[0m tool pedida pelo modelo [3mid[0m[2m=[0mcall_171766 [3mferramenta[0m[2m=[0mweb.open [3mrisco[0m[2m=[0mSafe [3mpedido[0m[2m=[0mweb.open: browser=Chrome, url=youtube.com
+[2m2026-09-18T19:51:52.503771Z[0m [34mDEBUG[0m [2mopenjarvisbr_core::engine[0m[2m:[0m turno do modelo concluído
+[2m2026-09-18T19:51:52.525957Z[0m [32m INFO[0m [2mopenjarvisbr_core::engine[0m[2m:[0m tool concluída [3mid[0m[2m=[0mcall_171766 [3mferramenta[0m[2m=[0mweb.open [3morigem[0m[2m=[0m"modelo" [3mms[0m[2m=[0m38 [3mresultado[0m[2m=[0m{"browser":"Google Chrome","opened":"https://youtube.com"}
+[2m2026-09-18T19:51:52.526123Z[0m [34mDEBUG[0m [2mopenjarvisbr_core::live::session[0m[2m:[0m resposta de ferramenta enviada [3mquantidade[0m[2m=[0m1
+[2m2026-09-18T19:51:53.355913Z[0m [34mDEBUG[0m [2mopenjarvisbr_core::engine[0m[2m:[0m modelo disse [3mtexto[0m[2m=[0mO YouTube foi 
+[2m2026-09-18T19:51:53.714626Z[0m [34mDEBUG[0m [2mopenjarvisbr_core::engine[0m[2m:[0m modelo disse [3mtexto[0m[2m=[0maberto no Chrome.
+[9] > volta
+
+  [tool] web.open: browser=Safari, url=google.com
+[2m2026-09-18T19:51:54.660609Z[0m [34mDEBUG[0m [2mopenjarvisbr_core::engine[0m[2m:[0m usuário disse [3mtexto[0m[2m=[0mvolta [3mvia[0m[2m=[0m"texto"
+
+[2m2026-09-18T19:51:54.660672Z[0m [34mDEBUG[0m [2mopenjarvisbr_core::live::session[0m[2m:[0m texto de contexto enviado [3mtamanho[0m[2m=[0m5
+[2m2026-09-18T19:51:54.829394Z[0m [34mDEBUG[0m [2mopenjarvisbr_core::engine[0m[2m:[0m turno do modelo concluído
+[2m2026-09-18T19:51:55.147994Z[0m [34mDEBUG[0m [2mopenjarvisbr_core::reflex[0m[2m:[0m reflexo [3mdecision[0m[2m=[0mNothing [3mlatency_ms[0m[2m=[0m365
+[2m2026-09-18T19:51:55.959710Z[0m [34mDEBUG[0m [2mopenjarvisbr_core::engine[0m[2m:[0m modelo disse [3mtexto[0m[2m=[0mNão consigo navegar 
+[10] > pesquisa overclock
+  [ok] web.open: {"browser":"Safari","opened":"https://google.com"}
+
+  [tool] web.open: browser=Safari, url=google.com
+
+[2m2026-09-18T19:51:56.162370Z[0m [34mDEBUG[0m [2mopenjarvisbr_core::engine[0m[2m:[0m usuário disse [3mtexto[0m[2m=[0mpesquisa overclock [3mvia[0m[2m=[0m"texto"
+[2m2026-09-18T19:51:56.162422Z[0m [34mDEBUG[0m [2mopenjarvisbr_core::live::session[0m[2m:[0m texto de contexto enviado [3mtamanho[0m[2m=[0m18
+[2m2026-09-18T19:51:56.178641Z[0m [34mDEBUG[0m [2mopenjarvisbr_core::engine[0m[2m:[0m modelo disse [3mtexto[0m[2m=[0mpelas páginas
+[2m2026-09-18T19:51:56.427583Z[0m [34mDEBUG[0m [2mopenjarvisbr_core::engine[0m[2m:[0m turno do modelo concluído
+[2m2026-09-18T19:51:56.603707Z[0m [34mDEBUG[0m [2mopenjarvisbr_core::reflex[0m[2m:[0m reflexo [3mdecision[0m[2m=[0mNothing [3mlatency_ms[0m[2m=[0m319
+[11] > abre a Calculadora
+  [ok] web.open: {"browser":"Safari","opened":"https://google.com"}
+O Google já está aberto no Safari.
+[2m2026-09-18T19:51:57.665117Z[0m [34mDEBUG[0m [2mopenjarvisbr_core::engine[0m[2m:[0m usuário disse [3mtexto[0m[2m=[0mabre a Calculadora [3mvia[0m[2m=[0m"texto"
+[2m2026-09-18T19:51:57.665173Z[0m [34mDEBUG[0m [2mopenjarvisbr_core::live::session[0m[2m:[0m texto de contexto enviado [3mtamanho[0m[2m=[0m18
+[2m2026-09-18T19:51:57.957056Z[0m [34mDEBUG[0m [2mopenjarvisbr_core::engine[0m[2m:[0m turno do modelo concluído
+[2m2026-09-18T19:51:58.159044Z[0m [34mDEBUG[0m [2mopenjarvisbr_core::reflex[0m[2m:[0m reflexo [3mdecision[0m[2m=[0mNothing [3mlatency_ms[0m[2m=[0m372
+[2m2026-09-18T19:51:59.043701Z[0m [32m INFO[0m [2mopenjarvisbr_core::engine[0m[2m:[0m tool pedida pelo modelo [3mid[0m[2m=[0mcall_171840 [3mferramenta[0m[2m=[0mweb.open [3mrisco[0m[2m=[0mSafe [3mpedido[0m[2m=[0mweb.open: https://www.google.com/search?q=overclock
+[2m2026-09-18T19:51:59.043743Z[0m [32m INFO[0m [2mopenjarvisbr_core::engine[0m[2m:[0m tool pedida pelo modelo [3mid[0m[2m=[0mcall_171843 [3mferramenta[0m[2m=[0mapp.open [3mrisco[0m[2m=[0mSafe [3mpedido[0m[2m=[0mapp.open: Calculator
+[2m2026-09-18T19:51:59.043750Z[0m [34mDEBUG[0m [2mopenjarvisbr_core::engine[0m[2m:[0m turno do modelo concluído
+[2m2026-09-18T19:51:59.085525Z[0m [32m INFO[0m [2mopenjarvisbr_core::engine[0m[2m:[0m tool concluída [3mid[0m[2m=[0mcall_171843 [3mferramenta[0m[2m=[0mapp.open [3morigem[0m[2m=[0m"modelo" [3mms[0m[2m=[0m41 [3mresultado[0m[2m=[0m{"opened":"Calculator"}
+[2m2026-09-18T19:51:59.085613Z[0m [34mDEBUG[0m [2mopenjarvisbr_core::live::session[0m[2m:[0m resposta de ferramenta enviada [3mquantidade[0m[2m=[0m1
+[2m2026-09-18T19:51:59.087800Z[0m [32m INFO[0m [2mopenjarvisbr_core::engine[0m[2m:[0m tool concluída [3mid[0m[2m=[0mcall_171840 [3mferramenta[0m[2m=[0mweb.open [3morigem[0m[2m=[0m"modelo" [3mms[0m[2m=[0m44 [3mresultado[0m[2m=[0m{"opened":"https://www.google.com/search?q=overclock"}
+[2m2026-09-18T19:51:59.087837Z[0m [34mDEBUG[0m [2mopenjarvisbr_core::live::session[0m[2m:[0m resposta de ferramenta enviada [3mquantidade[0m[2m=[0m1
+[12] > abre a globo
+
+[2m2026-09-18T19:51:59.168165Z[0m [34mDEBUG[0m [2mopenjarvisbr_core::engine[0m[2m:[0m usuário disse [3mtexto[0m[2m=[0mabre a globo [3mvia[0m[2m=[0m"texto"
+[2m2026-09-18T19:51:59.168236Z[0m [34mDEBUG[0m [2mopenjarvisbr_core::live::session[0m[2m:[0m texto de contexto enviado [3mtamanho[0m[2m=[0m12
+[2m2026-09-18T19:51:59.687095Z[0m [34mDEBUG[0m [2mopenjarvisbr_core::reflex[0m[2m:[0m reflexo [3mdecision[0m[2m=[0mNothing [3mlatency_ms[0m[2m=[0m397
+[2m2026-09-18T19:52:00.572328Z[0m [32m INFO[0m [2mopenjarvisbr_core::engine[0m[2m:[0m tool pedida pelo modelo [3mid[0m[2m=[0mcall_171862 [3mferramenta[0m[2m=[0mweb.open [3mrisco[0m[2m=[0mSafe [3mpedido[0m[2m=[0mweb.open: globo.com
+[2m2026-09-18T19:52:00.590609Z[0m [34mDEBUG[0m [2mopenjarvisbr_core::engine[0m[2m:[0m turno do modelo concluído
+[2m2026-09-18T19:52:00.613622Z[0m [32m INFO[0m [2mopenjarvisbr_core::engine[0m[2m:[0m tool concluída [3mid[0m[2m=[0mcall_171862 [3mferramenta[0m[2m=[0mweb.open [3morigem[0m[2m=[0m"modelo" [3mms[0m[2m=[0m41 [3mresultado[0m[2m=[0m{"opened":"https://globo.com"}
+[2m2026-09-18T19:52:00.613779Z[0m [32m INFO[0m [2mopenjarvisbr_core::engine[0m[2m:[0m reflexo aprendeu a ação [3mferramenta[0m[2m=[0mweb.open [3mfrase[0m[2m=[0m"abre a globo"
+[2m2026-09-18T19:52:00.613847Z[0m [34mDEBUG[0m [2mopenjarvisbr_core::live::session[0m[2m:[0m resposta de ferramenta enviada [3mquantidade[0m[2m=[0m1
+[2m2026-09-18T19:52:01.485388Z[0m [34mDEBUG[0m [2mopenjarvisbr_core::engine[0m[2m:[0m modelo disse [3mtexto[0m[2m=[0mA página da 
+[2m2026-09-18T19:52:01.747477Z[0m [34mDEBUG[0m [2mopenjarvisbr_core::engine[0m[2m:[0m modelo disse [3mtexto[0m[2m=[0mGlobo foi aberta.
+[14] > abre a globo
+  [reflexo 359 ms] app.open
+
+  [tool] app.open: Google Chrome
+  [ok] app.open: {"opened":"Google Chrome"}
+[2m2026-09-18T19:52:02.671229Z[0m [34mDEBUG[0m [2mopenjarvisbr_core::engine[0m[2m:[0m usuário disse [3mtexto[0m[2m=[0mabre a globo [3mvia[0m[2m=[0m"texto"
+O Google Chrome foi aberto.
+[2m2026-09-18T19:52:02.671280Z[0m [34mDEBUG[0m [2mopenjarvisbr_core::live::session[0m[2m:[0m texto de contexto enviado [3mtamanho[0m[2m=[0m12
+[2m2026-09-18T19:52:02.839940Z[0m [34mDEBUG[0m [2mopenjarvisbr_core::engine[0m[2m:[0m turno do modelo concluído
+[2m2026-09-18T19:52:03.266255Z[0m [32m INFO[0m [2mopenjarvisbr_core::engine[0m[2m:[0m tool pedida pelo modelo [3mid[0m[2m=[0mcall_171876 [3mferramenta[0m[2m=[0mweb.open [3mrisco[0m[2m=[0mSafe [3mpedido[0m[2m=[0mweb.open: globo.com
+[2m2026-09-18T19:52:03.281239Z[0m [34mDEBUG[0m [2mopenjarvisbr_core::engine[0m[2m:[0m turno do modelo concluído
+[2m2026-09-18T19:52:03.300742Z[0m [32m INFO[0m [2mopenjarvisbr_core::engine[0m[2m:[0m tool concluída [3mid[0m[2m=[0mcall_171876 [3mferramenta[0m[2m=[0mweb.open [3morigem[0m[2m=[0m"modelo" [3mms[0m[2m=[0m34 [3mresultado[0m[2m=[0m{"opened":"https://globo.com"}
+[2m2026-09-18T19:52:03.300838Z[0m [34mDEBUG[0m [2mopenjarvisbr_core::live::session[0m[2m:[0m resposta de ferramenta enviada [3mquantidade[0m[2m=[0m1
+[2m2026-09-18T19:52:03.593152Z[0m [34mDEBUG[0m [2mopenjarvisbr_core::reflex[0m[2m:[0m reflexo pulou esta rodada [3merr[0m[2m=[0mTypeSafe não respondeu a tempo
+[2m2026-09-18T19:52:04.168873Z[0m [32m INFO[0m [2mopenjarvisbr_core::engine[0m[2m:[0m tool pedida pelo modelo [3mid[0m[2m=[0mcall_171885 [3mferramenta[0m[2m=[0mweb.open [3mrisco[0m[2m=[0mSafe [3mpedido[0m[2m=[0mweb.open: globo.com
+[15] > diminui o som
+
+  [tool] web.open: browser=Chrome, url=youtube.com
+
+[2m2026-09-18T19:52:04.173677Z[0m [34mDEBUG[0m [2mopenjarvisbr_core::engine[0m[2m:[0m usuário disse [3mtexto[0m[2m=[0mdiminui o som [3mvia[0m[2m=[0m"texto"
+[2m2026-09-18T19:52:04.173788Z[0m [34mDEBUG[0m [2mopenjarvisbr_core::live::session[0m[2m:[0m texto de contexto enviado [3mtamanho[0m[2m=[0m13
+[2m2026-09-18T19:52:04.188051Z[0m [34mDEBUG[0m [2mopenjarvisbr_core::engine[0m[2m:[0m turno do modelo concluído
+[2m2026-09-18T19:52:04.208160Z[0m [32m INFO[0m [2mopenjarvisbr_core::engine[0m[2m:[0m tool concluída [3mid[0m[2m=[0mcall_171885 [3mferramenta[0m[2m=[0mweb.open [3morigem[0m[2m=[0m"modelo" [3mms[0m[2m=[0m39 [3mresultado[0m[2m=[0m{"opened":"https://globo.com"}
+[2m2026-09-18T19:52:04.208337Z[0m [34mDEBUG[0m [2mopenjarvisbr_core::live::session[0m[2m:[0m resposta de ferramenta enviada [3mquantidade[0m[2m=[0m1
+[2m2026-09-18T19:52:04.657073Z[0m [34mDEBUG[0m [2mopenjarvisbr_core::reflex[0m[2m:[0m reflexo [3mdecision[0m[2m=[0mAct(ToolCall { id: "reflex-3", name: "sys.volume", args: Object {"action": String("down")} }) [3mlatency_ms[0m[2m=[0m361
+[2m2026-09-18T19:52:04.657114Z[0m [32m INFO[0m [2mopenjarvisbr_core::engine[0m[2m:[0m reflexo agiu [3mferramenta[0m[2m=[0msys.volume [3mms[0m[2m=[0m361
+[2m2026-09-18T19:52:04.657153Z[0m [34mDEBUG[0m [2mopenjarvisbr_core::live::session[0m[2m:[0m texto de contexto enviado [3mtamanho[0m[2m=[0m141
+[2m2026-09-18T19:52:04.740874Z[0m [32m INFO[0m [2mopenjarvisbr_core::engine[0m[2m:[0m já executada pelo reflexo; não repete [3mferramenta[0m[2m=[0msys.volume
+[2m2026-09-18T19:52:04.741478Z[0m [34mDEBUG[0m [2mopenjarvisbr_core::live::session[0m[2m:[0m resposta de ferramenta enviada [3mquantidade[0m[2m=[0m1
+[2m2026-09-18T19:52:04.757458Z[0m [34mDEBUG[0m [2mopenjarvisbr_core::engine[0m[2m:[0m turno do modelo concluído
+[2m2026-09-18T19:52:05.155653Z[0m [32m INFO[0m [2mopenjarvisbr_core::engine[0m[2m:[0m tool concluída [3mid[0m[2m=[0mreflex-3 [3mferramenta[0m[2m=[0msys.volume [3morigem[0m[2m=[0m"reflexo" [3mms[0m[2m=[0m498 [3mresultado[0m[2m=[0m{"level":90,"muted":false}
+[16] > coloca o volume em 30
+  [ok] web.open: {"browser":"Google Chrome","opened":"https://youtube.com"}
+
+  [tool] web.open: browser=Chrome, url=youtube.com
+
+[2m2026-09-18T19:52:05.674898Z[0m [34mDEBUG[0m [2mopenjarvisbr_core::engine[0m[2m:[0m usuário disse [3mtexto[0m[2m=[0mcoloca o volume em 30 [3mvia[0m[2m=[0m"texto"
+[2m2026-09-18T19:52:05.675202Z[0m [34mDEBUG[0m [2mopenjarvisbr_core::live::session[0m[2m:[0m texto de contexto enviado [3mtamanho[0m[2m=[0m21
+[2m2026-09-18T19:52:06.199696Z[0m [34mDEBUG[0m [2mopenjarvisbr_core::reflex[0m[2m:[0m reflexo [3mdecision[0m[2m=[0mAct(ToolCall { id: "reflex-4", name: "sys.volume", args: Object {"action": String("set"), "level": Number(30)} }) [3mlatency_ms[0m[2m=[0m403
+[2m2026-09-18T19:52:06.199793Z[0m [32m INFO[0m [2mopenjarvisbr_core::engine[0m[2m:[0m reflexo agiu [3mferramenta[0m[2m=[0msys.volume [3mms[0m[2m=[0m403
+[2m2026-09-18T19:52:06.199887Z[0m [34mDEBUG[0m [2mopenjarvisbr_core::live::session[0m[2m:[0m texto de contexto enviado [3mtamanho[0m[2m=[0m157
+[2m2026-09-18T19:52:06.364061Z[0m [32m INFO[0m [2mopenjarvisbr_core::engine[0m[2m:[0m já executada pelo reflexo; não repete [3mferramenta[0m[2m=[0msys.volume
+[2m2026-09-18T19:52:06.364188Z[0m [34mDEBUG[0m [2mopenjarvisbr_core::live::session[0m[2m:[0m resposta de ferramenta enviada [3mquantidade[0m[2m=[0m1
+[2m2026-09-18T19:52:06.382928Z[0m [34mDEBUG[0m [2mopenjarvisbr_core::engine[0m[2m:[0m turno do modelo concluído
+[2m2026-09-18T19:52:06.449341Z[0m [32m INFO[0m [2mopenjarvisbr_core::engine[0m[2m:[0m tool concluída [3mid[0m[2m=[0mreflex-4 [3mferramenta[0m[2m=[0msys.volume [3morigem[0m[2m=[0m"reflexo" [3mms[0m[2m=[0m248 [3mresultado[0m[2m=[0m{"level":30}
+[2m2026-09-18T19:52:07.119196Z[0m [34mDEBUG[0m [2mopenjarvisbr_core::engine[0m[2m:[0m modelo disse [3mtexto[0m[2m=[0mO volume foi 
+[17] > que horas são?
+  [ok] web.open: {"browser":"Google Chrome","opened":"https://youtube.com"}
+O YouTube foi aberto no Chrome.
+[2m2026-09-18T19:52:07.176383Z[0m [34mDEBUG[0m [2mopenjarvisbr_core::engine[0m[2m:[0m usuário disse [3mtexto[0m[2m=[0mque horas são? [3mvia[0m[2m=[0m"texto"
+[2m2026-09-18T19:52:07.176456Z[0m [34mDEBUG[0m [2mopenjarvisbr_core::live::session[0m[2m:[0m texto de contexto enviado [3mtamanho[0m[2m=[0m15
+[2m2026-09-18T19:52:07.399600Z[0m [34mDEBUG[0m [2mopenjarvisbr_core::engine[0m[2m:[0m turno do modelo concluído
+[2m2026-09-18T19:52:07.587642Z[0m [34mDEBUG[0m [2mopenjarvisbr_core::reflex[0m[2m:[0m reflexo [3mdecision[0m[2m=[0mNothing [3mlatency_ms[0m[2m=[0m290
+[2m2026-09-18T19:52:08.357284Z[0m [34mDEBUG[0m [2mopenjarvisbr_core::engine[0m[2m:[0m modelo disse [3mtexto[0m[2m=[0mSão sete e 
+[2m2026-09-18T19:52:08.601291Z[0m [34mDEBUG[0m [2mopenjarvisbr_core::engine[0m[2m:[0m modelo disse [3mtexto[0m[2m=[0mcinquenta e dois
+[2m2026-09-18T19:52:08.678189Z[0m [32m INFO[0m [2mopenjarvisbr_core::engine[0m[2m:[0m encerrando o motor
+roteiro terminado: 12 falas, 0 tool(s) com erro
