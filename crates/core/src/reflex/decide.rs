@@ -287,6 +287,15 @@ pub fn decide(s: &Situation, a: &Answers, t: &Thresholds) -> Decision {
     if s.turn_locked {
         return Decision::Nothing;
     }
+    // A pergunta `learned` já aponta para uma chamada completa e a política
+    // de risco ainda será aplicada pelo engine. Não descarte essa escolha só
+    // porque a pergunta genérica `intent` divergiu ou ficou abaixo do limiar.
+    if let Some(action) = confident_pick(a, "learned", t.act)
+        .and_then(learned_index)
+        .and_then(|i| s.inventory.learned.get(i))
+    {
+        return Decision::Act(action.to_call(next_call_id()));
+    }
     let Some(intent) = confident_pick(a, "intent", t.act) else {
         return Decision::Nothing;
     };
@@ -690,6 +699,27 @@ mod tests {
         let mut e = Answers::default();
         choice(&mut e, "intent", "learned", 0.95);
         assert!(matches!(decide(&s, &e, &t()), Decision::Nothing));
+    }
+
+    #[test]
+    fn learned_confiante_vence_intent_divergente_sem_alvo_acionavel() {
+        let i = inv_learned(vec![learned(
+            "abre a globo",
+            "web.open",
+            json!({"site": "globo"}),
+            3,
+        )]);
+        let s = Situation { heard: "abre a globo", inventory: &i, pending_confirm: false, turn_locked: false };
+        let mut a = Answers::default();
+        choice(&mut a, "intent", "open_app", 0.66);
+        choice(&mut a, "app", "Google Chrome", 0.49);
+        choice(&mut a, "learned", "l0", 0.97);
+
+        assert!(matches!(
+            decide(&s, &a, &t()),
+            Decision::Act(call)
+                if call.name == "web.open" && call.args == json!({"site": "globo"})
+        ));
     }
 
     #[test]
