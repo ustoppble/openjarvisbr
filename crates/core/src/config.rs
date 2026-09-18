@@ -887,7 +887,11 @@ mod tests {
             tools_enabled: true,
             ..Settings::default()
         };
-        assert_eq!(effective_tool_globs(&settings), ["*"]);
+        // A lista de cada perfil é testada em profiles.rs; aqui só a ligação
+        // config → perfil ativo.
+        let assistant = profiles::resolve_profile(profiles::DEFAULT_PROFILE_ID, None, &[]).tools;
+        assert!(assistant.iter().any(|glob| glob == "*"));
+        assert_eq!(effective_tool_globs(&settings), assistant);
         settings.profile = Some("therapist".to_string());
         assert!(effective_tool_globs(&settings).is_empty());
         settings.profile = Some("pair_programmer".to_string());
