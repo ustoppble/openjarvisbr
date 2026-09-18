@@ -68,6 +68,15 @@ pub async fn run(
                     print_line(format!("[confirma?] {summary} — diga sim/não ou tecle S/N").yellow().bold());
                     confirms.push_back(id);
                 }
+                Ok(EngineEvent::ReflexActed { call, latency_ms, .. }) => {
+                    transcript.end_line();
+                    print_line(format!("[⚡ reflexo] {} · {latency_ms} ms", call.name).yellow());
+                }
+                Ok(EngineEvent::ReflexConfirmed { approve, .. }) => {
+                    transcript.end_line();
+                    let verdict = if approve { "aprovado" } else { "negado" };
+                    print_line(format!("[⚡ reflexo] {verdict} por voz").yellow());
+                }
                 Ok(EngineEvent::ToolResult { id, name, ok, summary }) => {
                     confirms.retain(|pending| pending != &id);
                     transcript.end_line();

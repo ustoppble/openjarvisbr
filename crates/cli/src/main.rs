@@ -179,6 +179,7 @@ fn main() {
         mcp_servers: settings.mcp_servers.clone(),
         full_access: cli.full_access || settings.full_access,
         always_allow: settings.always_allow.clone(),
+        reflex: settings.reflex.clone(),
     };
     if engine_config.full_access {
         eprintln!("⚠ acesso total ligado: o Jarvis executa comandos e mexe em arquivos sem perguntar");
