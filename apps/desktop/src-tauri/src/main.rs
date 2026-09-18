@@ -589,6 +589,63 @@ fn save_reflex_sites(
     openjarvisbr_core::config::save_reflex_sites(&sites, act_threshold).map_err(|e| e.to_string())
 }
 
+/// Uma ação aprendida pelo reflexo, como a aba mostra: resumo em vez dos
+/// argumentos crus. `index` é a chave para esquecer.
+#[derive(serde::Serialize)]
+struct LearnedActionPayload {
+    index: usize,
+    tool: String,
+    summary: String,
+    phrase: String,
+    count: u32,
+}
+
+fn reflex_memory_path() -> Result<std::path::PathBuf, String> {
+    openjarvisbr_core::reflex::memory::Memory::default_path()
+        .ok_or_else(|| "sem HOME: não sei onde fica a memória do reflexo".to_string())
+}
+
+fn load_reflex_memory() -> Result<(std::path::PathBuf, openjarvisbr_core::reflex::memory::Memory), String> {
+    let path = reflex_memory_path()?;
+    let memory = openjarvisbr_core::reflex::memory::Memory::load(&path).map_err(|e| e.to_string())?;
+    Ok((path, memory))
+}
+
+/// O que o reflexo já aprendeu (lê o arquivo; a sessão em andamento tem a
+/// própria cópia e recarrega ao reiniciar a conversa).
+#[tauri::command]
+fn get_reflex_memory() -> Result<Vec<LearnedActionPayload>, String> {
+    let (_, memory) = load_reflex_memory()?;
+    Ok(memory
+        .actions()
+        .iter()
+        .enumerate()
+        .map(|(index, action)| LearnedActionPayload {
+            index,
+            tool: action.tool.clone(),
+            summary: openjarvisbr_core::engine_tools::call_summary(&action.to_call(String::new())),
+            phrase: action.phrase.clone(),
+            count: action.count,
+        })
+        .collect())
+}
+
+#[tauri::command]
+fn forget_learned(index: usize) -> Result<(), String> {
+    let (path, mut memory) = load_reflex_memory()?;
+    if memory.forget(index).is_none() {
+        return Err(format!("ação {index} já não está na memória"));
+    }
+    memory.save(&path).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn forget_all_learned() -> Result<(), String> {
+    let (path, mut memory) = load_reflex_memory()?;
+    memory.clear();
+    memory.save(&path).map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 fn quit(app: AppHandle) {
     app.exit(0);
@@ -655,7 +712,10 @@ fn main() {
             set_reflex_enabled,
             set_typesafe_api_key,
             set_openrouter_api_key,
-            save_reflex_sites
+            save_reflex_sites,
+            get_reflex_memory,
+            forget_learned,
+            forget_all_learned
         ])
         .setup(|app| {
             let handle = app.handle().clone();

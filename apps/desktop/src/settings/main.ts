@@ -590,8 +590,10 @@ fullAccessCheckbox.addEventListener("change", async () => {
 void listen<{ on: boolean }>("engine://full_access", (event) => setFullAccessChecked(event.payload.on));
 
 // --- Aba Reflexo (JRV v4) ---------------------------------------------------
-// Contrato dos comandos Tauri (chegam na Task 18): get_reflex_settings,
-// set_reflex_enabled, set_typesafe_api_key, save_reflex_sites.
+// Comandos Tauri: get_reflex_settings, set_reflex_enabled, set_typesafe_api_key,
+// set_openrouter_api_key, save_reflex_sites (só o limiar muda por aqui; a lista
+// manual de sites do config.toml passa intacta), get_reflex_memory,
+// forget_learned, forget_all_learned.
 
 interface ReflexSite {
   name: string;
@@ -612,33 +614,73 @@ const reflexOpenRouterKeyInput = $<HTMLInputElement>("reflex-openrouter-key");
 const reflexKeyStatus = $<HTMLDivElement>("reflex-key-status");
 const reflexThresholdInput = $<HTMLInputElement>("reflex-threshold");
 const reflexThresholdValue = $<HTMLSpanElement>("reflex-threshold-value");
-const reflexSitesList = $<HTMLUListElement>("reflex-sites");
-const reflexSitesEmpty = $<HTMLDivElement>("reflex-sites-empty");
-const reflexSiteName = $<HTMLInputElement>("reflex-site-name");
-const reflexSiteUrl = $<HTMLInputElement>("reflex-site-url");
-const reflexSiteAddButton = $<HTMLButtonElement>("reflex-site-add");
+const reflexLearnedList = $<HTMLUListElement>("reflex-learned");
+const reflexLearnedEmpty = $<HTMLDivElement>("reflex-learned-empty");
+const reflexForgetAllButton = $<HTMLButtonElement>("reflex-forget-all");
 const reflexSaveButton = $<HTMLButtonElement>("reflex-save");
 
+/// Lista manual `[[reflex.sites]]` do config: não aparece mais na aba, mas
+/// volta como veio ao salvar o limiar, para não apagar o que o usuário tem.
 let reflexSites: ReflexSite[] = [];
 
-function renderReflexSites() {
-  reflexSitesList.innerHTML = "";
-  reflexSitesEmpty.hidden = reflexSites.length > 0;
-  reflexSites.forEach((site, index) => {
-    const item = document.createElement("li");
-    const label = document.createElement("span");
-    label.textContent = `${site.name} → ${site.url}`;
-    const remove = document.createElement("button");
-    remove.type = "button";
-    remove.textContent = "Remover";
-    remove.addEventListener("click", () => {
-      reflexSites.splice(index, 1);
-      renderReflexSites();
-    });
-    item.append(label, remove);
-    reflexSitesList.appendChild(item);
-  });
+interface LearnedAction {
+  index: number;
+  tool: string;
+  summary: string;
+  phrase: string;
+  count: number;
 }
+
+function renderLearned(actions: LearnedAction[]) {
+  reflexLearnedList.innerHTML = "";
+  reflexLearnedEmpty.hidden = actions.length > 0;
+  reflexForgetAllButton.disabled = actions.length === 0;
+  for (const action of actions) {
+    const item = document.createElement("li");
+    const main = document.createElement("div");
+    main.className = "learned-main";
+    const summary = document.createElement("span");
+    summary.className = "learned-summary";
+    const tool = document.createElement("span");
+    tool.className = "learned-tool";
+    tool.textContent = action.tool;
+    summary.append(tool, document.createTextNode(action.summary));
+    const phrase = document.createElement("span");
+    phrase.className = "learned-phrase";
+    phrase.textContent = `"${action.phrase}" · ${action.count}×`;
+    main.append(summary, phrase);
+    const forget = document.createElement("button");
+    forget.type = "button";
+    forget.textContent = "Esquecer";
+    forget.addEventListener("click", () => {
+      void forgetLearned(action.index);
+    });
+    item.append(main, forget);
+    reflexLearnedList.appendChild(item);
+  }
+}
+
+async function loadReflexMemory() {
+  renderLearned(await invoke<LearnedAction[]>("get_reflex_memory"));
+}
+
+async function forgetLearned(index: number | "all") {
+  try {
+    if (index === "all") {
+      await invoke("forget_all_learned");
+    } else {
+      await invoke("forget_learned", { index });
+    }
+    await loadReflexMemory();
+    setStatus("esquecido. Reinicie a conversa para aplicar.", "ok");
+  } catch (err) {
+    setStatus(String(err), "error");
+  }
+}
+
+reflexForgetAllButton.addEventListener("click", () => {
+  void forgetLearned("all");
+});
 
 async function loadReflex() {
   const reflex = await invoke<ReflexSettingsPayload>("get_reflex_settings");
@@ -648,24 +690,11 @@ async function loadReflex() {
   reflexThresholdInput.value = String(reflex.act_threshold);
   reflexThresholdValue.textContent = reflex.act_threshold.toFixed(2);
   reflexSites = reflex.sites;
-  renderReflexSites();
+  await loadReflexMemory();
 }
 
 reflexThresholdInput.addEventListener("input", () => {
   reflexThresholdValue.textContent = Number(reflexThresholdInput.value).toFixed(2);
-});
-
-reflexSiteAddButton.addEventListener("click", () => {
-  const name = reflexSiteName.value.trim();
-  const url = reflexSiteUrl.value.trim();
-  if (!name || !/^https?:\/\//.test(url)) {
-    setStatus("informe nome e URL começando com http(s)://", "error");
-    return;
-  }
-  reflexSites.push({ name, url });
-  reflexSiteName.value = "";
-  reflexSiteUrl.value = "";
-  renderReflexSites();
 });
 
 reflexSaveButton.addEventListener("click", async () => {

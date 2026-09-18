@@ -229,6 +229,28 @@
         margin-left: 8px;
         flex-shrink: 0;
       }
+      .learned-list li {
+        align-items: flex-start;
+        padding: 6px 0;
+        border-bottom: 1px solid #1f1f1f;
+      }
+      .learned-list .learned-main {
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+        min-width: 0;
+      }
+      .learned-list .learned-summary {
+        overflow-wrap: anywhere;
+      }
+      .learned-list .learned-tool {
+        color: #9c9c9c;
+        margin-right: 6px;
+      }
+      .learned-list .learned-phrase {
+        font-size: 11px;
+        color: #9c9c9c;
+      }
       .section-title {
         font-size: 12px;
         color: #9c9c9c;
@@ -535,9 +557,9 @@
           <label for="reflex-enabled">Reflexo ligado (Jev)</label>
         </div>
         <div class="field-hint" style="margin-top: -10px">
-          Ações seguras em ~300 ms: abrir app, abrir site da lista, mídia e volume, além de
-          "sim/não" por voz. A transcrição do que você fala e os nomes dos apps são enviados à
-          TypeSafe.ai enquanto o reflexo estiver ligado.
+          Ações seguras em ~300 ms: abrir app, mídia, volume e repetir o que o Gemini já fez
+          para você, além de "sim/não" por voz. A transcrição do que você fala, os nomes dos
+          apps e as ações aprendidas são enviados à TypeSafe.ai enquanto o reflexo estiver ligado.
         </div>
 
         <div class="field">
@@ -562,21 +584,14 @@
         </div>
 
         <div class="field">
-          <p class="section-title">Sites que o reflexo pode abrir</p>
-          <ul class="target-list" id="reflex-sites"></ul>
-          <div class="field-hint" id="reflex-sites-empty">Nenhum site na lista. O reflexo só abre URLs daqui, nunca montadas da fala.</div>
-          <div class="row" style="margin-top: 10px">
-            <div class="field">
-              <label for="reflex-site-name">Nome</label>
-              <input type="text" id="reflex-site-name" autocomplete="off" placeholder="ex.: YouTube" />
-            </div>
-            <div class="field">
-              <label for="reflex-site-url">URL</label>
-              <input type="text" id="reflex-site-url" autocomplete="off" placeholder="https://…" />
-            </div>
+          <p class="section-title">O que o reflexo já aprendeu</p>
+          <ul class="target-list learned-list" id="reflex-learned"></ul>
+          <div class="field-hint" id="reflex-learned-empty">
+            Nada ainda. Toda ação que o Gemini executar com sucesso entra aqui, e da próxima vez
+            o reflexo a repete sem esperar. Ações que pedem confirmação continuam pedindo.
           </div>
           <div class="button-row" style="margin-top: 10px">
-            <button type="button" id="reflex-site-add">Adicionar</button>
+            <button type="button" id="reflex-forget-all">Esquecer tudo</button>
           </div>
         </div>
 
