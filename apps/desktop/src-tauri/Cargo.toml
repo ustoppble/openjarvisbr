@@ -19,6 +19,7 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 tauri-plugin-single-instance = "2.4.4"
 tauri-plugin-drag = "2.1.1"
+tauri-plugin-updater = "2"
 
 [[bin]]
 name = "openjarvisbr-desktop"

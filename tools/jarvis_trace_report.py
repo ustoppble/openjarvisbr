@@ -224,6 +224,20 @@ def report(turns: list[Turn]) -> str:
     if jev:
         lines.append(f"- Chamadas ao Jev: {len(jev)}; Act: {acts} ({100 * acts // len(jev)}%); "
                      f"latência média {int(statistics.mean(jev))} ms, máx {max(jev)} ms")
+        # "Quando NÃO usar o Jev": turno que consultou o juiz, gastou latência e
+        # não virou ação nenhuma. É o desperdício que a regra do gate tem de zerar.
+        gasto = 0
+        desperdicio = []
+        for tr in turns:
+            chamadas = [ms for (_, _, ms) in tr.reflex if ms >= 0]
+            agiu = any(d.startswith("Act") for (_, d, _) in tr.reflex)
+            if chamadas and not agiu:
+                gasto += sum(chamadas)
+                desperdicio.append((' '.join(tr.user).strip() or '(sem fala)', len(chamadas), sum(chamadas)))
+        lines.append(f"- Jev gasto sem ação: {len(desperdicio)} de {len([t for t in turns if t.reflex])} turnos"
+                     f" ({gasto} ms jogados fora)")
+        for fala, n, ms in desperdicio:
+            lines.append(f"  - \"{fala[:70]}{'…' if len(fala) > 70 else ''}\" — {n} chamada(s), {ms} ms, nenhuma ação")
     if fala_acao:
         lines.append(f"- Transcrição→primeira tool: média {int(statistics.mean(fala_acao))} ms, máx {int(max(fala_acao))} ms "
                      "(a transcrição chega junto com a chamada; o fim da fala real não está no trace)")

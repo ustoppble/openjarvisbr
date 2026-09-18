@@ -8,6 +8,7 @@ mod commands;
 mod errors;
 mod tool_events;
 mod tools_config;
+mod updater;
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
@@ -663,6 +664,7 @@ fn main() {
         }))
         // Arrastar o ícone do app para a lista do painel de Privacidade (JRV-58).
         .plugin(tauri_plugin_drag::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
                 .with_handler(|app, _shortcut, event| {
@@ -810,6 +812,7 @@ fn main() {
                 });
             }
 
+            updater::start(handle.clone());
             spawn_startup(handle);
 
             Ok(())
