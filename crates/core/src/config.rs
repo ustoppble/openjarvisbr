@@ -67,6 +67,59 @@ struct FileConfig {
     openrouter_api_key: Option<String>,
     /// Seção `[reflex]`.
     reflex: Option<ReflexSection>,
+    /// Seção `[overlay]`: posição e tamanho da janela do overlay.
+    overlay: Option<OverlaySection>,
+    /// Seção `[settings_window]`: tamanho e posição da janela de
+    /// configurações.
+    settings_window: Option<WindowGeometry>,
+}
+
+/// Escalas do overlay aceitas em `[overlay].scale`, com o fator aplicado ao
+/// tamanho da janela e ao zoom da página.
+pub const OVERLAY_SCALES: [(&str, f64); 3] = [("small", 0.8), ("medium", 1.0), ("large", 1.25)];
+
+/// Padrão quando `[overlay].scale` está ausente ou inválido.
+const DEFAULT_OVERLAY_SCALE: &str = "medium";
+
+/// `[overlay]` no config.toml. `x`/`y` em pixels lógicos; ausentes = topo
+/// central do monitor ativo.
+#[derive(Debug, Clone, Default, PartialEq, Deserialize, Serialize)]
+pub struct OverlaySection {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub x: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub y: Option<f64>,
+    /// "small", "medium" (padrão) ou "large".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scale: Option<String>,
+}
+
+/// Tamanho e posição de uma janela, em pixels lógicos.
+#[derive(Debug, Clone, Copy, PartialEq, Deserialize, Serialize)]
+pub struct WindowGeometry {
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
+}
+
+/// Nome da escala já resolvido: qualquer valor fora de `OVERLAY_SCALES` cai
+/// no padrão.
+pub fn normalize_overlay_scale(value: Option<&str>) -> &'static str {
+    OVERLAY_SCALES
+        .iter()
+        .find(|(name, _)| Some(*name) == value)
+        .map(|(name, _)| *name)
+        .unwrap_or(DEFAULT_OVERLAY_SCALE)
+}
+
+/// Fator da escala `name` (1.0 para desconhecida).
+pub fn overlay_scale_factor(name: &str) -> f64 {
+    OVERLAY_SCALES
+        .iter()
+        .find(|(scale, _)| *scale == name)
+        .map(|(_, factor)| *factor)
+        .unwrap_or(1.0)
 }
 
 /// Quem serve o Jev: a TypeSafe direto ou o OpenRouter (mesmo protocolo,
@@ -384,6 +437,15 @@ pub struct Settings {
     pub always_allow: Vec<String>,
     /// `[reflex]` + `typesafe_api_key` já resolvidos.
     pub reflex: ReflexSettings,
+    /// `[overlay]` como está no arquivo (escala via `effective_overlay_scale`).
+    pub overlay: OverlaySection,
+    /// `[settings_window]`, quando a janela já foi movida/redimensionada.
+    pub settings_window: Option<WindowGeometry>,
+}
+
+/// Escala do overlay já resolvida: "small", "medium" (padrão) ou "large".
+pub fn effective_overlay_scale(settings: &Settings) -> &'static str {
+    normalize_overlay_scale(settings.overlay.scale.as_deref())
 }
 
 /// Estilo do overlay já resolvido: `surreal` (padrão) ou `orb`.
@@ -427,6 +489,10 @@ struct FileConfigOut {
     openrouter_api_key: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     reflex: Option<ReflexSection>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    overlay: Option<OverlaySection>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    settings_window: Option<WindowGeometry>,
 }
 
 /// Campos que a janela de configurações grava. `api_key` só vem preenchido
@@ -533,6 +599,8 @@ pub fn load_settings() -> Settings {
             .map(|t| crate::tools::decisions::clean(&t.always_allow))
             .unwrap_or_default(),
         reflex,
+        overlay: parsed.overlay.unwrap_or_default(),
+        settings_window: parsed.settings_window,
     }
 }
 
@@ -600,6 +668,8 @@ pub fn save(update: SaveSettings) -> Result<(), ConfigError> {
         typesafe_api_key: existing.typesafe_api_key,
         openrouter_api_key: existing.openrouter_api_key,
         reflex: existing.reflex,
+        overlay: existing.overlay,
+        settings_window: existing.settings_window,
     };
 
     write_file_config(&path, &out)
@@ -630,6 +700,8 @@ pub fn save_profile(id: &str) -> Result<(), ConfigError> {
         typesafe_api_key: existing.typesafe_api_key.clone(),
         openrouter_api_key: existing.openrouter_api_key.clone(),
         reflex: existing.reflex.clone(),
+        overlay: existing.overlay.clone(),
+        settings_window: existing.settings_window,
     };
     write_file_config(&path, &out)
 }
@@ -710,9 +782,48 @@ pub fn save_reflex_sites(sites: &[SiteConfig], act_threshold: f32) -> Result<(),
     })
 }
 
+/// Grava `[overlay].x`/`y` (pixels lógicos), preservando o resto do arquivo.
+pub fn save_overlay_position(x: f64, y: f64) -> Result<(), ConfigError> {
+    edit_section("overlay", |section| {
+        section.insert("x".to_string(), toml::Value::Float(x.round()));
+        section.insert("y".to_string(), toml::Value::Float(y.round()));
+    })
+}
+
+/// Tira `[overlay].x`/`y`: o overlay volta a abrir no topo central.
+pub fn clear_overlay_position() -> Result<(), ConfigError> {
+    edit_section("overlay", |section| {
+        section.remove("x");
+        section.remove("y");
+    })
+}
+
+/// Grava `[overlay].scale` (valor inválido vira o padrão), preservando o
+/// resto do arquivo.
+pub fn save_overlay_scale(scale: &str) -> Result<(), ConfigError> {
+    let scale = normalize_overlay_scale(Some(scale));
+    save_section_value("overlay", "scale", toml::Value::String(scale.to_string()))
+}
+
+/// Grava `[settings_window]`, preservando o resto do arquivo.
+pub fn save_settings_window(geometry: WindowGeometry) -> Result<(), ConfigError> {
+    let value = toml::Value::try_from(geometry).map_err(ConfigError::SerializeFile)?;
+    edit_table(|table| {
+        table.insert("settings_window".to_string(), value);
+    })
+}
+
 /// Troca uma chave de uma seção (`[section]`) preservando literalmente o
 /// resto do arquivo (inclusive seções que o core não modela).
 fn save_section_value(section: &str, key: &str, value: toml::Value) -> Result<(), ConfigError> {
+    edit_section(section, |entry| {
+        entry.insert(key.to_string(), value);
+    })
+}
+
+/// Aplica `edit` na tabela `[section]` (criada se faltar), preservando o
+/// resto do arquivo.
+fn edit_section(section: &str, edit: impl FnOnce(&mut toml::Table)) -> Result<(), ConfigError> {
     edit_table(|table| {
         let entry = table
             .entry(section)
@@ -721,7 +832,7 @@ fn save_section_value(section: &str, key: &str, value: toml::Value) -> Result<()
             *entry = toml::Value::Table(toml::Table::new());
         }
         if let Some(entry) = entry.as_table_mut() {
-            entry.insert(key.to_string(), value);
+            edit(entry);
         }
     })
 }
@@ -1184,5 +1295,63 @@ url = "https://youtube.com"
         let s = format!("{:?}", reflex_from(&parsed, ReflexEnv::default()));
         assert!(!s.contains("segredo-456"));
         assert!(s.contains("***"));
+    }
+
+    #[test]
+    fn escala_do_overlay_normaliza_e_da_o_fator() {
+        assert_eq!(normalize_overlay_scale(None), "medium");
+        assert_eq!(normalize_overlay_scale(Some("gigante")), "medium");
+        assert_eq!(normalize_overlay_scale(Some("small")), "small");
+        assert_eq!(overlay_scale_factor("small"), 0.8);
+        assert_eq!(overlay_scale_factor("large"), 1.25);
+        assert_eq!(overlay_scale_factor("?"), 1.0);
+    }
+
+    #[test]
+    fn overlay_e_janela_de_configuracoes_sobrevivem_aos_saves_e_preservam_o_resto() {
+        let _home = TempHome::new();
+        let settings = load_settings();
+        assert_eq!(effective_overlay_scale(&settings), "medium");
+        assert_eq!(settings.overlay, OverlaySection::default());
+        assert!(settings.settings_window.is_none());
+
+        let path = config_path().unwrap();
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &path,
+            "api_key = \"k\"\n[tools]\nfull_access = true\n[reflex]\nenabled = false\nact_threshold = 0.9\n",
+        )
+        .unwrap();
+
+        save_overlay_position(812.4, 40.0).unwrap();
+        save_overlay_scale("large").unwrap();
+        let geometry = WindowGeometry { x: 10.0, y: 20.0, width: 600.0, height: 700.0 };
+        save_settings_window(geometry).unwrap();
+
+        let settings = load_settings();
+        assert_eq!(settings.overlay.x, Some(812.0));
+        assert_eq!(settings.overlay.y, Some(40.0));
+        assert_eq!(effective_overlay_scale(&settings), "large");
+        assert_eq!(settings.settings_window, Some(geometry));
+        assert!(settings.full_access);
+        assert_eq!(load_api_key().unwrap(), "k");
+
+        // A janela de configurações e o menu de perfil regravam o arquivo
+        // inteiro: [overlay] e [settings_window] têm que sobreviver.
+        save(SaveSettings::default()).unwrap();
+        save_profile("pair_programmer").unwrap();
+        let settings = load_settings();
+        assert_eq!(settings.overlay.x, Some(812.0));
+        assert_eq!(effective_overlay_scale(&settings), "large");
+        assert_eq!(settings.settings_window, Some(geometry));
+
+        save_overlay_scale("gigante").unwrap();
+        clear_overlay_position().unwrap();
+        let settings = load_settings();
+        assert_eq!(settings.overlay, OverlaySection { x: None, y: None, scale: Some("medium".into()) });
+        assert!(settings.full_access);
+        let raw = std::fs::read_to_string(&path).unwrap();
+        assert!(raw.contains("[reflex]"));
+        assert!(raw.contains("act_threshold = 0.9"));
     }
 }
