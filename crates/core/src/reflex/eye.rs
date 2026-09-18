@@ -3,10 +3,14 @@
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 
+use tracing::warn;
+
 pub use crate::config::SiteConfig;
+pub use super::memory::{LearnedAction, Memory};
+use crate::tools::ToolCall;
 
 /// Um app conhecido pelo Olho: nome do bundle (sem `.app`) e se está rodando.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -28,12 +32,25 @@ pub struct Inventory {
     pub installed_apps: Vec<AppEntry>,
     pub running_apps: Vec<AppEntry>,
     pub sites: Vec<SiteConfig>,
+    /// Ações que o assistente já fez (ordem = índice estável da memória).
+    pub learned: Vec<LearnedAction>,
     pub refreshed_at: Instant,
 }
 
 impl Inventory {
     pub fn new(installed_apps: Vec<AppEntry>, sites: Vec<SiteConfig>) -> Self {
-        Self { installed_apps, running_apps: Vec::new(), sites, refreshed_at: Instant::now() }
+        Self {
+            installed_apps,
+            running_apps: Vec::new(),
+            sites,
+            learned: Vec::new(),
+            refreshed_at: Instant::now(),
+        }
+    }
+
+    pub fn with_learned(mut self, learned: Vec<LearnedAction>) -> Self {
+        self.learned = learned;
+        self
     }
 
     /// Atualiza `running` nos instalados e reconstrói `running_apps` (inclui
@@ -138,6 +155,10 @@ pub fn default_app_dirs() -> Vec<PathBuf> {
 pub struct EyeHandle {
     inner: Arc<RwLock<Arc<Inventory>>>,
     kick: tokio::sync::mpsc::UnboundedSender<()>,
+    /// Fonte da verdade das ações aprendidas; `Inventory.learned` é cópia.
+    memory: Arc<Mutex<Memory>>,
+    /// `None` = só em memória (testes).
+    memory_path: Option<PathBuf>,
 }
 
 impl EyeHandle {
@@ -150,6 +171,66 @@ impl EyeHandle {
     pub fn refresh_now(&self) {
         let _ = self.kick.send(());
     }
+
+    /// Aprende `call` dita por `phrase`: snapshot atualizado na hora, arquivo
+    /// gravado em background. `false` = nada mudou (frase vazia ou args
+    /// sensíveis).
+    pub fn learn(&self, phrase: &str, call: &ToolCall) -> bool {
+        self.mutate(|m| m.learn(phrase, call))
+    }
+
+    /// Esquece a ação de índice `index` (o índice de `Inventory.learned`).
+    pub fn forget(&self, index: usize) -> bool {
+        self.mutate(|m| m.forget(index).is_some())
+    }
+
+    /// Esquece tudo.
+    pub fn forget_all(&self) {
+        self.mutate(|m| {
+            m.clear();
+            true
+        });
+    }
+
+    /// Cópia da memória corrente.
+    pub fn memory(&self) -> Memory {
+        self.memory.lock().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+
+    fn mutate(&self, f: impl FnOnce(&mut Memory) -> bool) -> bool {
+        let snapshot = {
+            let mut mem = self.memory.lock().unwrap_or_else(|e| e.into_inner());
+            if !f(&mut mem) {
+                return false;
+            }
+            mem.clone()
+        };
+        {
+            let mut slot = self.inner.write().unwrap_or_else(|e| e.into_inner());
+            let mut next = (**slot).clone();
+            next.learned = snapshot.actions().to_vec();
+            *slot = Arc::new(next);
+        }
+        if let Some(path) = self.memory_path.clone() {
+            persist(snapshot, path);
+        }
+        true
+    }
+}
+
+/// Grava sem travar o runtime; fora de um runtime tokio grava na hora.
+fn persist(memory: Memory, path: PathBuf) {
+    let save = move || {
+        if let Err(err) = memory.save(&path) {
+            warn!(%err, "memória do reflexo não gravada");
+        }
+    };
+    match tokio::runtime::Handle::try_current() {
+        Ok(rt) => {
+            rt.spawn_blocking(save);
+        }
+        Err(_) => save(),
+    }
 }
 
 /// Fábrica do Olho: varre uma vez na largada e mantém uma task em background
@@ -157,16 +238,31 @@ impl EyeHandle {
 pub struct Eye;
 
 impl Eye {
+    /// Olho real: pastas padrão, sondagem do SO e memória de ações carregada
+    /// de `Memory::default_path()` (arquivo ilegível = memória vazia).
     pub fn start(sites: Vec<SiteConfig>) -> EyeHandle {
-        Self::start_with(
+        let path = Memory::default_path();
+        let memory = path
+            .as_deref()
+            .map(|p| {
+                Memory::load(p).unwrap_or_else(|err| {
+                    warn!(%err, "memória do reflexo ignorada");
+                    Memory::new()
+                })
+            })
+            .unwrap_or_default();
+        Self::start_with_memory(
             default_app_dirs(),
             sites,
             Arc::new(OsRunningProbe),
             INSTALLED_EVERY,
             RUNNING_EVERY,
+            memory,
+            path,
         )
     }
 
+    /// Sem memória persistida (testes e usos sem disco).
     pub fn start_with(
         dirs: Vec<PathBuf>,
         sites: Vec<SiteConfig>,
@@ -174,10 +270,32 @@ impl Eye {
         installed_every: Duration,
         running_every: Duration,
     ) -> EyeHandle {
-        let inventory = Arc::new(Inventory::new(scan_app_dirs(&dirs), sites.clone()));
+        Self::start_with_memory(dirs, sites, probe, installed_every, running_every, Memory::new(), None)
+    }
+
+    /// `memory` entra no snapshot já no boot; `memory_path = Some` grava a
+    /// cada `learn`/`forget`.
+    pub fn start_with_memory(
+        dirs: Vec<PathBuf>,
+        sites: Vec<SiteConfig>,
+        probe: Arc<dyn RunningProbe>,
+        installed_every: Duration,
+        running_every: Duration,
+        memory: Memory,
+        memory_path: Option<PathBuf>,
+    ) -> EyeHandle {
+        let inventory = Arc::new(
+            Inventory::new(scan_app_dirs(&dirs), sites.clone()).with_learned(memory.actions().to_vec()),
+        );
         let inner = Arc::new(RwLock::new(inventory));
+        let memory = Arc::new(Mutex::new(memory));
         let (kick, mut kicked) = tokio::sync::mpsc::unbounded_channel::<()>();
-        let handle = EyeHandle { inner: Arc::clone(&inner), kick };
+        let handle = EyeHandle {
+            inner: Arc::clone(&inner),
+            kick,
+            memory: Arc::clone(&memory),
+            memory_path,
+        };
         tokio::spawn(async move {
             let mut last_installed = Instant::now();
             let mut tick = tokio::time::interval(running_every);
@@ -200,6 +318,9 @@ impl Eye {
                     last_installed = Instant::now();
                 }
                 next.mark_running(&running);
+                // a memória é a fonte da verdade: um `learn` no meio do tick
+                // não pode ser pisado pela cópia velha
+                next.learned = memory.lock().unwrap_or_else(|e| e.into_inner()).actions().to_vec();
                 *inner.write().unwrap_or_else(|e| e.into_inner()) = Arc::new(next);
             }
         });
@@ -291,5 +412,94 @@ mod handle_tests {
         assert_eq!(b.running_apps.len(), 2);
         // snapshot é Arc: clonar não copia o inventário
         assert!(Arc::ptr_eq(&eye.snapshot(), &eye.snapshot()));
+    }
+
+    fn call(url: &str) -> ToolCall {
+        ToolCall { id: "c".into(), name: "web.open".into(), args: serde_json::json!({ "url": url }) }
+    }
+
+    #[tokio::test]
+    async fn learn_atualiza_snapshot_na_hora_e_forget_remove() {
+        let eye = Eye::start_with(
+            vec![],
+            vec![],
+            Arc::new(FakeProbe(Mutex::new(vec![]))),
+            Duration::from_secs(3600),
+            Duration::from_secs(3600),
+        );
+        assert!(eye.snapshot().learned.is_empty());
+        assert!(eye.learn("abre a globo", &call("https://globo.com")));
+        assert!(eye.learn("abre o uol", &call("https://uol.com.br")));
+        let inv = eye.snapshot();
+        assert_eq!(inv.learned.len(), 2);
+        assert_eq!(inv.learned[0].phrase, "abre a globo");
+        // args sensíveis: nada muda
+        let secret = ToolCall {
+            id: "s".into(),
+            name: "http.get".into(),
+            args: serde_json::json!({ "token": "x" }),
+        };
+        assert!(!eye.learn("chama a api", &secret));
+        assert_eq!(eye.snapshot().learned.len(), 2);
+        // repetir incrementa no snapshot
+        assert!(eye.learn("abre a globo", &call("https://globo.com")));
+        assert_eq!(eye.snapshot().learned[0].count, 2);
+        assert!(!eye.forget(9));
+        assert!(eye.forget(0));
+        let inv = eye.snapshot();
+        assert_eq!(inv.learned.len(), 1);
+        assert_eq!(inv.learned[0].phrase, "abre o uol");
+        eye.forget_all();
+        assert!(eye.snapshot().learned.is_empty());
+        assert!(eye.memory().is_empty());
+    }
+
+    #[tokio::test]
+    async fn tick_do_olho_nao_pisa_o_aprendido() {
+        let probe = Arc::new(FakeProbe(Mutex::new(vec!["Finder".into()])));
+        let eye = Eye::start_with(
+            vec![],
+            vec![],
+            probe,
+            Duration::from_secs(3600),
+            Duration::from_millis(20),
+        );
+        assert!(eye.learn("abre a globo", &call("https://globo.com")));
+        tokio::time::sleep(Duration::from_millis(80)).await;
+        let inv = eye.snapshot();
+        assert_eq!(inv.running_apps.len(), 1);
+        assert_eq!(inv.learned.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn memoria_entra_no_boot_e_learn_persiste_no_arquivo() {
+        let dir = std::env::temp_dir().join(format!("eye-memory-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = dir.join("reflex_memory.toml");
+        let mut seed = Memory::new();
+        seed.learn("abre o uol", &call("https://uol.com.br"));
+        let eye = Eye::start_with_memory(
+            vec![],
+            vec![],
+            Arc::new(FakeProbe(Mutex::new(vec![]))),
+            Duration::from_secs(3600),
+            Duration::from_secs(3600),
+            seed,
+            Some(path.clone()),
+        );
+        assert_eq!(eye.snapshot().learned[0].phrase, "abre o uol");
+        assert!(eye.learn("abre a globo", &call("https://globo.com")));
+        // gravação em background: espera aparecer
+        let mut back = Memory::new();
+        for _ in 0..50 {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+            back = Memory::load(&path).unwrap();
+            if back.len() == 2 {
+                break;
+            }
+        }
+        assert_eq!(back, eye.memory());
+        assert_eq!(back.actions()[1].phrase, "abre a globo");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
