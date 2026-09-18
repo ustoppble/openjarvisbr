@@ -7,6 +7,7 @@
 pub mod decide;
 pub mod eye;
 pub mod judge;
+pub mod memory;
 pub mod questions;
 
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
@@ -21,6 +22,7 @@ pub use crate::config::ReflexSettings;
 pub use decide::{Decision, Thresholds};
 pub use eye::EyeHandle;
 pub use judge::Judge;
+pub use memory::{LearnedAction, Memory};
 
 use decide::{build_questions, decide, Situation};
 use judge::JudgeError;
