@@ -7,11 +7,17 @@ use std::collections::BTreeSet;
 use serde_json::json;
 
 use super::eye::Inventory;
+use super::memory::LearnedAction;
 use super::questions::{Answers, Question, Questions};
+use crate::engine_tools::call_summary;
 use crate::tools::ToolCall;
 
 pub const MAX_CANDIDATES: usize = 40;
+/// Teto de ações aprendidas oferecidas por pergunta.
+pub const MAX_LEARNED: usize = 20;
 pub const NONE: &str = "none";
+/// Prefixo das chaves da pergunta `learned` (`l0`, `l1`, …): índice em `Inventory.learned`.
+pub const LEARNED_KEY_PREFIX: &str = "l";
 
 /// Minúsculas, sem acento, só letras/dígitos/espaço, espaços simples.
 pub fn normalize(text: &str) -> String {
@@ -70,6 +76,50 @@ pub fn app_candidates(heard: &str, inv: &Inventory) -> Vec<String> {
     out
 }
 
+/// Tokens da fala com ≥3 letras, normalizados.
+fn tokens(text: &str) -> Vec<String> {
+    normalize(text)
+        .split(' ')
+        .filter(|t| t.chars().count() >= 3)
+        .map(str::to_string)
+        .collect()
+}
+
+/// Ações aprendidas cuja frase compartilha ≥1 token (≥3 letras) com a fala,
+/// as `MAX_LEARNED` de maior `count`. O `usize` é o índice em `inv.learned`
+/// (estável: vira a chave `l{i}` da pergunta).
+pub fn learned_candidates<'a>(heard: &str, inv: &'a Inventory) -> Vec<(usize, &'a LearnedAction)> {
+    let heard_tokens: BTreeSet<String> = tokens(heard).into_iter().collect();
+    if heard_tokens.is_empty() {
+        return Vec::new();
+    }
+    let mut out: Vec<(usize, &LearnedAction)> = inv
+        .learned
+        .iter()
+        .enumerate()
+        .filter(|(_, a)| tokens(&a.phrase).iter().any(|t| heard_tokens.contains(t)))
+        .collect();
+    out.sort_by_key(|(_, a)| std::cmp::Reverse(a.count));
+    out.truncate(MAX_LEARNED);
+    out
+}
+
+/// Chave da opção `learned` para o índice `i`.
+pub fn learned_key(i: usize) -> String {
+    format!("{LEARNED_KEY_PREFIX}{i}")
+}
+
+/// Índice de uma chave `l{i}`; `None` para `none` ou chave estranha.
+pub fn learned_index(key: &str) -> Option<usize> {
+    key.strip_prefix(LEARNED_KEY_PREFIX)?.parse().ok()
+}
+
+/// Texto da opção: `tool: resumo ("frase original")`.
+pub fn learned_option_text(action: &LearnedAction) -> String {
+    let summary = call_summary(&action.to_call(String::new()));
+    format!("{summary} (\"{}\")", action.phrase)
+}
+
 pub struct Situation<'a> {
     pub heard: &'a str,
     pub inventory: &'a Inventory,
@@ -84,6 +134,7 @@ const INTENT_CRITERIA: &[(&str, &str)] = &[
     ("open_site", "O usuário quer abrir um site ou página na internet."),
     ("media", "O usuário quer controlar a música ou o vídeo: tocar, pausar, próxima, anterior."),
     ("volume", "O usuário quer mudar o volume do computador ou silenciar."),
+    ("learned", "O usuário quer repetir uma ação que o assistente já fez antes para ele (ver a pergunta `learned`)."),
     (NONE, "Não é um pedido de ação no computador: conversa, pergunta, outra coisa."),
 ];
 
@@ -148,6 +199,16 @@ pub fn build_questions(s: &Situation) -> Option<Questions> {
         criteria.push((NONE.into(), "nenhum destes sites".into()));
         q.insert("site", Question::choice("Se for para abrir um site, qual?", criteria));
     }
+    let learned = learned_candidates(s.heard, s.inventory);
+    if !learned.is_empty() {
+        let mut criteria: Vec<(String, String)> = learned
+            .iter()
+            .map(|(i, action)| (learned_key(*i), learned_option_text(action)))
+            .collect();
+        criteria.push((NONE.into(), "nenhuma destas ações".into()));
+        q.insert("learned", Question::choice(
+            "Se for para repetir uma ação que o assistente já fez antes, qual?", criteria));
+    }
     q.insert("media", Question::choice("Se for controle de mídia, qual ação?", MEDIA_CRITERIA.iter().copied()));
     q.insert("volume", Question::choice("Se for volume, qual ação?", VOLUME_CRITERIA.iter().copied()));
     Some(q)
@@ -170,10 +231,14 @@ pub enum Decision {
 
 pub const REFLEX_CALL_PREFIX: &str = "reflex-";
 
-fn new_call(name: &str, args: serde_json::Value) -> ToolCall {
+fn next_call_id() -> String {
     static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
     let n = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    ToolCall { id: format!("{REFLEX_CALL_PREFIX}{n}"), name: name.to_string(), args }
+    format!("{REFLEX_CALL_PREFIX}{n}")
+}
+
+fn new_call(name: &str, args: serde_json::Value) -> ToolCall {
+    ToolCall { id: next_call_id(), name: name.to_string(), args }
 }
 
 /// Primeiro inteiro 0..=100 da fala.
@@ -195,26 +260,17 @@ fn confident_pick<'a>(a: &'a Answers, id: &str, min: f32) -> Option<&'a str> {
     (p >= min).then_some(pick)
 }
 
-/// Tools que o reflexo pode disparar. Constante: não é configurável.
+/// Tools nativas do reflexo (as perguntas fixas app/site/media/volume).
+/// Constante: não é configurável. Ações aprendidas podem sair com qualquer
+/// tool: quem barra é o engine, pela política de risco (`Safe` executa,
+/// `Confirm` vira `ToolConfirmNeeded`).
 pub const REFLEX_TOOLS: &[&str] = &["app.open", "web.open", "sys.volume", "media.control"];
 
 pub fn is_reflex_tool(name: &str) -> bool {
     REFLEX_TOOLS.contains(&name)
 }
 
-/// Defesa em profundidade: nenhuma decisão sai daqui com tool fora de `REFLEX_TOOLS`.
-fn guard(decision: Decision) -> Decision {
-    match decision {
-        Decision::Act(call) if !is_reflex_tool(&call.name) => Decision::Nothing,
-        other => other,
-    }
-}
-
 pub fn decide(s: &Situation, a: &Answers, t: &Thresholds) -> Decision {
-    guard(decide_unguarded(s, a, t))
-}
-
-fn decide_unguarded(s: &Situation, a: &Answers, t: &Thresholds) -> Decision {
     if a.noul("always").unwrap_or(0.0) >= t.confirm {
         return Decision::AlwaysAllow;
     }
@@ -258,6 +314,13 @@ fn decide_unguarded(s: &Situation, a: &Answers, t: &Thresholds) -> Decision {
             Some(action) => Decision::Act(new_call("sys.volume", json!({ "action": action }))),
             None => Decision::Nothing,
         },
+        "learned" => {
+            let Some(key) = confident_pick(a, "learned", t.act) else { return Decision::Nothing };
+            match learned_index(key).and_then(|i| s.inventory.learned.get(i)) {
+                Some(action) => Decision::Act(action.to_call(next_call_id())),
+                None => Decision::Nothing,
+            }
+        }
         _ => Decision::Nothing,
     }
 }
@@ -526,5 +589,115 @@ mod tests {
         }
         assert!(!is_reflex_tool("shell.run"));
         assert!(!is_reflex_tool("fs.read")); // NEVER_ASK, mas fora do reflexo
+    }
+
+    use crate::reflex::memory::LearnedAction;
+
+    fn learned(phrase: &str, tool: &str, args: serde_json::Value, count: u32) -> LearnedAction {
+        LearnedAction { phrase: phrase.into(), tool: tool.into(), args, count, last_used: 0 }
+    }
+
+    fn inv_learned(actions: Vec<LearnedAction>) -> Inventory {
+        Inventory::new(vec![], vec![]).with_learned(actions)
+    }
+
+    #[test]
+    fn candidatas_aprendidas_por_token_em_comum_top_por_count() {
+        let mut actions: Vec<LearnedAction> = (0..30)
+            .map(|n| learned(&format!("abre o site {n}"), "web.open", json!({"url": format!("https://s{n}.com")}), n))
+            .collect();
+        actions.push(learned("toca a playlist de foco", "media.control", json!({"action": "play"}), 99));
+        actions.push(learned("ab", "web.open", json!({"url": "https://curto.com"}), 5)); // token curto
+        let i = inv_learned(actions);
+        let c = learned_candidates("abre a globo", &i);
+        assert_eq!(c.len(), MAX_LEARNED);
+        // ordenadas por count desc: a primeira é "abre o site 29" (índice 29)
+        assert_eq!(c[0].0, 29);
+        assert_eq!(c[0].1.count, 29);
+        assert!(c.iter().all(|(_, a)| a.tool == "web.open"));
+        assert!(c.iter().all(|(i, _)| *i < 30));
+        // acento e caixa não atrapalham
+        let c2 = learned_candidates("TOCA a Playlíst", &i);
+        assert_eq!(c2.len(), 1);
+        assert_eq!(c2[0].0, 30);
+        // fala só com tokens curtos: nada
+        assert!(learned_candidates("ab o", &i).is_empty());
+        // sem memória: nada
+        assert!(learned_candidates("abre a globo", &inv_learned(vec![])).is_empty());
+    }
+
+    #[test]
+    fn pergunta_learned_so_com_candidatas_e_com_chaves_estaveis() {
+        let i = inv_learned(vec![
+            learned("toca a playlist", "media.control", json!({"action": "play"}), 1),
+            learned("abre a globo", "web.open", json!({"url": "https://globo.com"}), 3),
+        ]);
+        let s = Situation { heard: "abre a globo aí", inventory: &i, pending_confirm: false, turn_locked: false };
+        let q = build_questions(&s).unwrap();
+        match &q.0["learned"] {
+            Question::Choice { criteria, .. } => {
+                assert_eq!(criteria.len(), 2);
+                assert!(criteria.contains_key(NONE));
+                assert!(!criteria.contains_key("l0"));
+                assert_eq!(criteria["l1"], "web.open: https://globo.com (\"abre a globo\")");
+            }
+            _ => panic!("learned deve ser choice"),
+        }
+        match &q.0["intent"] {
+            Question::Choice { criteria, .. } => assert!(criteria.contains_key("learned")),
+            _ => panic!(),
+        }
+        // sem candidata: sem pergunta
+        let s2 = Situation { heard: "aumenta o volume", inventory: &i, pending_confirm: false, turn_locked: false };
+        assert!(!build_questions(&s2).unwrap().0.contains_key("learned"));
+    }
+
+    #[test]
+    fn intent_learned_com_alvo_age_com_os_args_gravados() {
+        let i = inv_learned(vec![
+            learned("toca a playlist", "media.control", json!({"action": "play"}), 1),
+            learned("roda o build", "shell.run", json!({"command": "cargo build"}), 3),
+        ]);
+        let s = Situation { heard: "roda o build", inventory: &i, pending_confirm: false, turn_locked: false };
+        let mut a = Answers::default();
+        choice(&mut a, "intent", "learned", 0.95);
+        choice(&mut a, "learned", "l1", 0.9);
+        match decide(&s, &a, &t()) {
+            Decision::Act(call) => {
+                // tool fora de REFLEX_TOOLS sai daqui: o engine aplica a política de risco
+                assert_eq!(call.name, "shell.run");
+                assert_eq!(call.args, json!({"command": "cargo build"}));
+                assert!(call.id.starts_with(REFLEX_CALL_PREFIX));
+            }
+            other => panic!("{other:?}"),
+        }
+        // none: nada
+        let mut b = Answers::default();
+        choice(&mut b, "intent", "learned", 0.95);
+        choice(&mut b, "learned", NONE, 0.9);
+        assert!(matches!(decide(&s, &b, &t()), Decision::Nothing));
+        // alvo abaixo do limiar: nada
+        let mut c = Answers::default();
+        choice(&mut c, "intent", "learned", 0.95);
+        choice(&mut c, "learned", "l1", 0.5);
+        assert!(matches!(decide(&s, &c, &t()), Decision::Nothing));
+        // chave que não existe mais (esquecida): nada
+        let mut d = Answers::default();
+        choice(&mut d, "intent", "learned", 0.95);
+        choice(&mut d, "learned", "l7", 0.95);
+        assert!(matches!(decide(&s, &d, &t()), Decision::Nothing));
+        // intent learned sem resposta learned: nada
+        let mut e = Answers::default();
+        choice(&mut e, "intent", "learned", 0.95);
+        assert!(matches!(decide(&s, &e, &t()), Decision::Nothing));
+    }
+
+    #[test]
+    fn chaves_learned_vao_e_voltam() {
+        assert_eq!(learned_key(7), "l7");
+        assert_eq!(learned_index("l7"), Some(7));
+        assert_eq!(learned_index(NONE), None);
+        assert_eq!(learned_index("lx"), None);
+        assert_eq!(learned_index("Safari"), None);
     }
 }
