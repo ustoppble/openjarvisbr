@@ -555,9 +555,10 @@ impl Default for ToolTimeouts {
     }
 }
 
-/// Resultado de uma execução, devolvido pela task ao loop.
+/// Resultado de uma execução, devolvido pela task ao loop. Leva a chamada
+/// inteira: uma chamada do modelo que deu certo vira ação aprendida.
 struct Finished {
-    name: String,
+    call: ToolCall,
     result: ToolResult,
 }
 
@@ -642,6 +643,9 @@ struct Worker {
     _reflex_keepalive: Option<mpsc::UnboundedSender<crate::reflex::Outcome>>,
     /// Ações feitas pelo reflexo, para deduplicar a chamada igual do modelo.
     recently_done: Vec<ReflexDone>,
+    /// Chamadas do modelo ainda não terminadas → o que o usuário tinha dito
+    /// quando chegaram. Sem erro no fim, a ação fica aprendida com essa frase.
+    pending_learn: HashMap<String, String>,
 }
 
 impl Worker {
@@ -753,6 +757,7 @@ impl Worker {
             reflex_rx,
             _reflex_keepalive: reflex_keepalive,
             recently_done: Vec::new(),
+            pending_learn: HashMap::new(),
             registry,
             tool_specs,
             policy: Policy::with_full_access(full_access.clone()),
@@ -1108,6 +1113,12 @@ impl Worker {
             self.respond(&call.name, ToolResult::ok(&call.id, output));
             return;
         }
+        self.pending_learn
+            .insert(call.id.clone(), self.user_heard.clone());
+        // O reflexo já pediu confirmação desta mesma ação: a chamada do modelo
+        // assume o lugar dela (com a fala já ouvida), para um "sim" só rodar
+        // uma vez e a resposta ir ao modelo.
+        let inherited = self.take_reflex_confirm_like(&call);
         let mut risk = self.policy.risk(&spec);
         if risk == Risk::Confirm
             && self.decisions.allows(&call.name)
@@ -1127,6 +1138,7 @@ impl Worker {
             Risk::Safe => self.execute(call),
             Risk::Confirm if self.recently_approved(&call) => {
                 info!(ferramenta = %call.name, "repetição de ação já aprovada, não executa de novo");
+                self.pending_learn.remove(&call.id);
                 if let Some(r) = self.recorder.as_mut() {
                     r.event("tool_repeat", &call.id);
                 }
@@ -1146,11 +1158,8 @@ impl Worker {
                     name: call.name.clone(),
                     summary,
                 });
-                self.confirms.push(PendingConfirm {
-                    call,
-                    asked: Instant::now(),
-                    heard: String::new(),
-                });
+                let (asked, heard) = inherited.unwrap_or_else(|| (Instant::now(), String::new()));
+                self.confirms.push(PendingConfirm { call, asked, heard });
                 let window = self.timeouts.voice_window;
                 if self
                     .early_approval
@@ -1163,14 +1172,43 @@ impl Worker {
         }
     }
 
+    /// Há confirmação pendente do reflexo com o mesmo nome e argumentos?
+    /// Tira-a da fila (evento "cancelada", como em `cancel_tools`) e devolve
+    /// quando foi pedida e o que já se ouviu, para a chamada do modelo herdar.
+    fn take_reflex_confirm_like(&mut self, call: &ToolCall) -> Option<(Instant, String)> {
+        let at = self.confirms.iter().position(|p| {
+            p.call.id.starts_with(crate::reflex::decide::REFLEX_CALL_PREFIX)
+                && p.call.name == call.name
+                && p.call.args == call.args
+        })?;
+        let pending = self.confirms.remove(at);
+        info!(ferramenta = %call.name, "chamada do modelo assume a confirmação pedida pelo reflexo");
+        if let Some(r) = self.recorder.as_mut() {
+            r.event("tool_cancel", format!("{} substituída por {}", pending.call.id, call.id));
+        }
+        self.emit.send(EngineEvent::ToolResult {
+            id: pending.call.id,
+            name: pending.call.name,
+            ok: false,
+            summary: "cancelada".to_string(),
+        });
+        Some((pending.asked, pending.heard))
+    }
+
     /// Decisão do reflexo: age, confirma ou libera, sempre pelos caminhos que
     /// já existem para o modelo.
     fn on_reflex(&mut self, outcome: crate::reflex::Outcome) {
-        use crate::reflex::decide::{is_reflex_tool, Decision};
+        use crate::reflex::decide::Decision;
         match outcome.decision {
             Decision::Act(call) => {
-                if !is_reflex_tool(&call.name) || self.registry.get(&call.name).is_none() {
-                    warn!(ferramenta = %call.name, "reflexo pediu ferramenta fora da lista; ignorado");
+                let Some(spec) = self.registry.get(&call.name).map(|tool| tool.spec()) else {
+                    warn!(ferramenta = %call.name, "reflexo pediu ferramenta fora do perfil; ignorado");
+                    return;
+                };
+                // Regra de risco, a mesma do modelo: `Safe` (ou já liberada)
+                // executa já; `Confirm` pergunta na hora, sem esperar o Gemini.
+                if self.policy.risk(&spec) == Risk::Confirm && !self.decisions.allows(&call.name) {
+                    self.reflex_confirm(call, outcome.latency_ms);
                     return;
                 }
                 info!(ferramenta = %call.name, ms = outcome.latency_ms, "reflexo agiu");
@@ -1252,6 +1290,35 @@ impl Worker {
             }
             Decision::Nothing => {}
         }
+    }
+
+    /// Ação `Confirm` escolhida pelo reflexo: não executa; pede confirmação
+    /// já, pelo mesmo caminho da chamada do modelo. "Sim" por voz ou botão
+    /// executa; a chamada igual do modelo, se vier, assume o pedido.
+    fn reflex_confirm(&mut self, call: ToolCall, latency_ms: u32) {
+        let summary = engine_tools::call_summary(&call);
+        info!(ferramenta = %call.name, ms = latency_ms, "reflexo pediu confirmação");
+        if let Some(r) = self.recorder.as_mut() {
+            r.event(
+                "reflex_confirm",
+                format!("{} {summary} {latency_ms}ms", call.id),
+            );
+        }
+        self.last_confirm_tool = Some(call.name.clone());
+        self.emit.send(EngineEvent::ToolRequested {
+            call: call.clone(),
+            risk: Risk::Confirm,
+        });
+        self.emit.send(EngineEvent::ToolConfirmNeeded {
+            id: call.id.clone(),
+            name: call.name.clone(),
+            summary,
+        });
+        self.confirms.push(PendingConfirm {
+            call,
+            asked: Instant::now(),
+            heard: String::new(),
+        });
     }
 
     /// Fim de um turno do modelo: se ele terminou perguntando "confirma?"
@@ -1337,8 +1404,27 @@ impl Worker {
                 pending.call.args.clone(),
                 Instant::now(),
             ));
+            if pending
+                .call
+                .id
+                .starts_with(crate::reflex::decide::REFLEX_CALL_PREFIX)
+            {
+                // Ação do reflexo aprovada: só agora o modelo fica sabendo, e
+                // a chamada igual dele passa a ser deduplicada.
+                self.recently_done
+                    .retain(|done| done.at.elapsed() < engine_tools::REFLEX_DONE_WINDOW);
+                self.recently_done.push(ReflexDone {
+                    call: pending.call.clone(),
+                    at: Instant::now(),
+                    output: serde_json::json!({"status": "executada pelo reflexo"}),
+                });
+                if let Some(session) = self.session.as_ref() {
+                    session.send_text(&engine_tools::reflex_context_text(&pending.call));
+                }
+            }
             self.execute(pending.call);
         } else {
+            self.pending_learn.remove(&pending.call.id);
             let error = format!(
                 "{}: o usuário não autorizou, nada foi executado",
                 ToolError::Denied
@@ -1364,6 +1450,7 @@ impl Worker {
             old.into_iter().map(|p| p.call).collect()
         };
         for call in expired {
+            self.pending_learn.remove(&call.id);
             if let Some(r) = self.recorder.as_mut() {
                 r.event("tool_confirm", format!("{} expirada", call.id));
             }
@@ -1390,10 +1477,7 @@ impl Worker {
                     format!("{} ({}s): a ação não terminou", ToolError::Timeout, limit.as_secs()),
                 ),
             };
-            let _ = done.send(Finished {
-                name: call.name,
-                result,
-            });
+            let _ = done.send(Finished { call, result });
         });
         self.running.insert(id, (name, task.abort_handle()));
     }
@@ -1401,6 +1485,7 @@ impl Worker {
     fn on_tool_finished(&mut self, done: Finished) {
         // Cancelada no meio do caminho: o servidor não quer mais a resposta.
         if self.running.remove(&done.result.id).is_none() {
+            self.pending_learn.remove(&done.result.id);
             return;
         }
         if !done
@@ -1408,7 +1493,11 @@ impl Worker {
             .id
             .starts_with(crate::reflex::decide::REFLEX_CALL_PREFIX)
         {
-            self.respond(&done.name, done.result);
+            let phrase = self.pending_learn.remove(&done.result.id);
+            if done.result.error.is_none() {
+                self.learn(phrase.as_deref().unwrap_or_default(), &done.call);
+            }
+            self.respond(&done.call.name, done.result);
             return;
         }
         // Chamada do reflexo: o modelo não a pediu, e um `functionResponse`
@@ -1426,7 +1515,29 @@ impl Worker {
             (Some(at), false) => self.recently_done[at].output = done.result.output.clone(),
             (None, _) => {}
         }
-        self.emit_result(&done.name, done.result);
+        self.emit_result(&done.call.name, done.result);
+    }
+
+    /// Ação do modelo que deu certo vira memória do reflexo, com a frase que
+    /// o usuário disse. Sem frase (o modelo agiu sozinho) não há o que
+    /// reconhecer depois: não aprende.
+    fn learn(&mut self, phrase: &str, call: &ToolCall) {
+        let phrase = phrase.trim();
+        if phrase.is_empty() {
+            return;
+        }
+        let Some(reflex) = self.reflex.as_ref() else {
+            return;
+        };
+        if reflex.eye().learn(phrase, call) {
+            info!(ferramenta = %call.name, frase = phrase, "reflexo aprendeu a ação");
+            if let Some(r) = self.recorder.as_mut() {
+                r.event(
+                    "reflex_learn",
+                    format!("{} \"{phrase}\"", engine_tools::call_summary(call)),
+                );
+            }
+        }
     }
 
     /// Devolve o resultado ao modelo e publica o evento.
@@ -1456,6 +1567,7 @@ impl Worker {
     /// responder ao modelo.
     fn cancel_tools(&mut self, ids: &[String]) {
         for id in ids {
+            self.pending_learn.remove(id);
             let name = if let Some(at) = self.confirms.iter().position(|p| &p.call.id == id) {
                 Some(self.confirms.remove(at).call.name)
             } else {
@@ -1485,6 +1597,7 @@ impl Worker {
         self.turn_repeated = false;
         self.user_heard.clear();
         self.recently_done.clear();
+        self.pending_learn.clear();
         if let Some(reflex) = &self.reflex {
             reflex.end_turn();
         }
@@ -2201,6 +2314,274 @@ mod tests {
             }
         }
         assert_eq!(*spy.0.lock().unwrap(), 1);
+        handle.stop().await;
+    }
+
+    /// Tool espiã com nome e risco à escolha: registra os argumentos.
+    #[derive(Clone)]
+    struct SpyTool {
+        name: &'static str,
+        risk: Risk,
+        calls: Arc<Mutex<Vec<serde_json::Value>>>,
+    }
+
+    impl SpyTool {
+        fn new(name: &'static str, risk: Risk) -> Self {
+            SpyTool { name, risk, calls: Arc::default() }
+        }
+        fn count(&self) -> usize {
+            self.calls.lock().unwrap().len()
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl crate::tools::Tool for SpyTool {
+        fn spec(&self) -> ToolSpec {
+            ToolSpec {
+                name: self.name.into(),
+                description: "spy".into(),
+                parameters: serde_json::json!({"type": "object"}),
+                risk: self.risk,
+            }
+        }
+        async fn call(&self, args: serde_json::Value) -> Result<serde_json::Value, ToolError> {
+            self.calls.lock().unwrap().push(args);
+            Ok(serde_json::json!({"status": "ok"}))
+        }
+    }
+
+    /// Olho vazio (sem apps, sem sites) só com a memória de ações.
+    fn empty_eye() -> crate::reflex::EyeHandle {
+        crate::reflex::eye::Eye::start_with(
+            vec![],
+            vec![],
+            Arc::new(NoProbe),
+            Duration::from_secs(3600),
+            Duration::from_secs(3600),
+        )
+    }
+
+    /// Juiz fake confiante: `intent = learned` e a ação aprendida `key`.
+    fn learned_answers(key: &str) -> crate::reflex::questions::Answers {
+        use crate::reflex::questions::{Answer, Answers};
+        use std::collections::BTreeMap;
+        let mut answers = Answers::default();
+        for (id, pick) in [("intent", "learned"), ("learned", key)] {
+            let mut p = BTreeMap::new();
+            p.insert(pick.to_string(), 0.96);
+            p.insert("none".to_string(), 0.04);
+            answers.answers.insert(
+                id.into(),
+                Answer::Choice {
+                    choice: pick.into(),
+                    probabilities: p,
+                    confidence: 0.96,
+                },
+            );
+        }
+        answers
+    }
+
+    async fn start_reflex_engine(
+        spy: &SpyTool,
+        judge: Arc<crate::reflex::judge::FakeJudge>,
+        eye: crate::reflex::EyeHandle,
+    ) -> (EngineHandle, broadcast::Receiver<EngineEvent>, mpsc::Sender<ServerEvent>) {
+        let (script_tx, script_rx) = mpsc::channel(16);
+        let (_mic_tx, mic_rx) = mpsc::channel(16);
+        let mut fake = fake::FakeBackend::new(script_rx, mic_rx);
+        fake.registry.register(Box::new(spy.clone()));
+        let fake = fake.with_reflex(judge, eye);
+        let mut config = test_config();
+        config.tools = vec!["*".into()];
+        config.reflex = reflex_settings();
+        let handle = start_with(config, Backend::Fake(fake)).await.unwrap();
+        let events = handle.events();
+        (handle, events, script_tx)
+    }
+
+    async fn wait_tool_result(
+        events: &mut broadcast::Receiver<EngineEvent>,
+        wanted: &str,
+    ) -> (bool, String) {
+        loop {
+            if let EngineEvent::ToolResult { id, ok, summary, .. } = next_non_level(events).await {
+                if id == wanted {
+                    return (ok, summary);
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn reflexo_aprende_acao_que_o_gemini_executou() {
+        use crate::reflex::judge::FakeJudge;
+
+        let eye = empty_eye();
+        let judge = Arc::new(FakeJudge::new()); // sem respostas: o reflexo não age
+        let spy = SpyTool::new("web.open", Risk::Safe);
+        let (handle, mut events, script_tx) = start_reflex_engine(&spy, judge, eye.clone()).await;
+
+        script_tx
+            .send(ServerEvent::UserText("abre a globo".into()))
+            .await
+            .unwrap();
+        let call = ToolCall {
+            id: "g1".into(),
+            name: "web.open".into(),
+            args: serde_json::json!({"url": "https://globo.com"}),
+        };
+        script_tx
+            .send(ServerEvent::ToolCall(vec![call.clone()]))
+            .await
+            .unwrap();
+        assert!(wait_tool_result(&mut events, "g1").await.0);
+        assert_eq!(spy.count(), 1);
+
+        let learned = eye.snapshot().learned.clone();
+        assert_eq!(learned.len(), 1, "a ação do Gemini ficou aprendida");
+        assert_eq!(learned[0].tool, "web.open");
+        assert_eq!(learned[0].args, call.args);
+        assert_eq!(learned[0].phrase, "abre a globo");
+        assert_eq!(learned[0].count, 1);
+        handle.stop().await;
+    }
+
+    #[tokio::test]
+    async fn reflexo_repete_acao_aprendida_sem_o_gemini_e_deduplica() {
+        use crate::reflex::judge::FakeJudge;
+
+        let eye = empty_eye();
+        let call = ToolCall {
+            id: "g0".into(),
+            name: "web.open".into(),
+            args: serde_json::json!({"url": "https://globo.com"}),
+        };
+        assert!(eye.learn("abre a globo", &call));
+        let judge = Arc::new(FakeJudge::new());
+        judge.push(learned_answers("l0"));
+        let spy = SpyTool::new("web.open", Risk::Safe);
+        let (handle, mut events, script_tx) = start_reflex_engine(&spy, judge, eye).await;
+
+        script_tx
+            .send(ServerEvent::UserText("abre a globo".into()))
+            .await
+            .unwrap();
+        let acted = loop {
+            match next_non_level(&mut events).await {
+                EngineEvent::ReflexActed { call, .. } => break call,
+                EngineEvent::Error { message, .. } => panic!("{message}"),
+                _ => {}
+            }
+        };
+        assert_eq!(acted.name, "web.open");
+        assert_eq!(acted.args, call.args, "args gravados na memória");
+        assert!(acted.id.starts_with(crate::reflex::decide::REFLEX_CALL_PREFIX));
+        assert!(wait_tool_result(&mut events, &acted.id).await.0);
+        assert_eq!(spy.count(), 1);
+
+        // O Gemini chama a mesma ação: deduplicada, recebe sucesso sem rodar.
+        script_tx
+            .send(ServerEvent::ToolCall(vec![ToolCall { id: "g1".into(), ..call }]))
+            .await
+            .unwrap();
+        assert!(wait_tool_result(&mut events, "g1").await.0);
+        assert_eq!(spy.count(), 1, "dedup: não executa de novo");
+        handle.stop().await;
+    }
+
+    #[tokio::test]
+    async fn reflexo_acao_aprendida_confirm_pede_confirmacao_e_so_roda_com_sim() {
+        use crate::reflex::judge::FakeJudge;
+
+        let eye = empty_eye();
+        let call = ToolCall {
+            id: "g0".into(),
+            name: "shell.run".into(),
+            args: serde_json::json!({"command": "ls"}),
+        };
+        assert!(eye.learn("lista os arquivos", &call));
+        let judge = Arc::new(FakeJudge::new());
+        judge.push(learned_answers("l0"));
+        let spy = SpyTool::new("shell.run", Risk::Confirm);
+        let (handle, mut events, script_tx) = start_reflex_engine(&spy, judge, eye).await;
+
+        script_tx
+            .send(ServerEvent::UserText("lista os arquivos".into()))
+            .await
+            .unwrap();
+        let pending = loop {
+            match next_non_level(&mut events).await {
+                EngineEvent::ToolConfirmNeeded { id, name, .. } => break (id, name),
+                EngineEvent::ReflexActed { .. } => panic!("agiu sem confirmar"),
+                EngineEvent::Error { message, .. } => panic!("{message}"),
+                _ => {}
+            }
+        };
+        assert!(pending.0.starts_with(crate::reflex::decide::REFLEX_CALL_PREFIX));
+        assert_eq!(pending.1, "shell.run");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert_eq!(spy.count(), 0, "não roda antes do sim");
+
+        script_tx
+            .send(ServerEvent::UserText("sim".into()))
+            .await
+            .unwrap();
+        assert!(wait_tool_result(&mut events, &pending.0).await.0);
+        assert_eq!(spy.count(), 1);
+        handle.stop().await;
+    }
+
+    #[tokio::test]
+    async fn chamada_igual_do_gemini_assume_confirmacao_pedida_pelo_reflexo() {
+        use crate::reflex::judge::FakeJudge;
+
+        let eye = empty_eye();
+        let call = ToolCall {
+            id: "g0".into(),
+            name: "shell.run".into(),
+            args: serde_json::json!({"command": "ls"}),
+        };
+        assert!(eye.learn("lista os arquivos", &call));
+        let judge = Arc::new(FakeJudge::new());
+        judge.push(learned_answers("l0"));
+        let spy = SpyTool::new("shell.run", Risk::Confirm);
+        let (handle, mut events, script_tx) = start_reflex_engine(&spy, judge, eye).await;
+
+        script_tx
+            .send(ServerEvent::UserText("lista os arquivos".into()))
+            .await
+            .unwrap();
+        let reflex_id = loop {
+            if let EngineEvent::ToolConfirmNeeded { id, .. } = next_non_level(&mut events).await {
+                break id;
+            }
+        };
+        // O Gemini pede a mesma ação: o pedido do reflexo sai ("cancelada") e
+        // o dele entra no lugar, sem segundo "confirma?" para o usuário.
+        script_tx
+            .send(ServerEvent::ToolCall(vec![ToolCall { id: "g1".into(), ..call }]))
+            .await
+            .unwrap();
+        let mut cancelled = false;
+        loop {
+            match next_non_level(&mut events).await {
+                EngineEvent::ToolResult { id, ok: false, summary, .. } if id == reflex_id => {
+                    assert_eq!(summary, "cancelada");
+                    cancelled = true;
+                }
+                EngineEvent::ToolConfirmNeeded { id, .. } if id == "g1" => break,
+                _ => {}
+            }
+        }
+        assert!(cancelled);
+        script_tx
+            .send(ServerEvent::UserText("sim".into()))
+            .await
+            .unwrap();
+        assert!(wait_tool_result(&mut events, "g1").await.0);
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert_eq!(spy.count(), 1, "um sim, uma execução");
         handle.stop().await;
     }
 
