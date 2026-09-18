@@ -84,6 +84,9 @@ com esse marcador.
 
 ## Comportamento no aplicativo
 
+O fluxo está isolado em `src-tauri/src/updater.rs`, é iniciado pelo builder em
+`main.rs` e mantém no próprio módulo os testes do agendamento.
+
 - Registrar `tauri-plugin-updater` no builder do Tauri.
 - Disparar uma checagem assíncrona ao abrir.
 - Repetir a checagem a cada seis horas enquanto o app estiver vivo.
