@@ -1,0 +1,14 @@
+{
+  "model": "jev-latest",
+  "answers": {
+    "intent": { "type": "choice", "choice": "open_app",
+                "probabilities": { "open_app": 0.93, "open_site": 0.03, "media": 0.02, "volume": 0.01, "none": 0.01 },
+                "confidence": 0.93 },
+    "app": { "type": "choice", "choice": "Safari",
+             "probabilities": { "Safari": 0.97, "Spotify": 0.02, "none": 0.01 }, "confidence": 0.97 },
+    "approve": { "type": "noul", "noul": 0.04 },
+    "deny": { "type": "noul", "noul": 0.02 },
+    "always": { "type": "noul", "noul": 0.01 }
+  },
+  "usage": { "input_tokens": 240, "output_tokens": 30 }
+}
