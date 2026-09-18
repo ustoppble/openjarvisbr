@@ -203,7 +203,10 @@ mod tests {
 
     #[test]
     fn all_tem_os_dez_nomes_e_riscos() {
-        let specs: Vec<_> = all(FullAccess::default()).iter().map(|t| t.spec()).collect();
+        let specs: Vec<_> = all(FullAccess::default())
+            .iter()
+            .map(|t| t.spec())
+            .collect();
         let names: Vec<_> = specs.iter().map(|s| s.name.as_str()).collect();
         assert_eq!(
             names,

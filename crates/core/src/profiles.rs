@@ -202,7 +202,10 @@ mod tests {
     fn therapist_profile_mentions_no_diagnosis_and_crisis_helpline() {
         let profiles = builtin_profiles(None);
         let therapist = profiles.iter().find(|p| p.id == "therapist").unwrap();
-        assert!(therapist.system_prompt.to_lowercase().contains("não substitui"));
+        assert!(therapist
+            .system_prompt
+            .to_lowercase()
+            .contains("não substitui"));
         assert!(therapist.system_prompt.contains("188"));
         assert!(therapist.system_prompt.to_lowercase().contains("cvv"));
     }
@@ -211,7 +214,10 @@ mod tests {
     fn english_teacher_profile_teaches_one_sentence_at_a_time_in_english() {
         let profiles = builtin_profiles(None);
         let teacher = profiles.iter().find(|p| p.id == "english_teacher").unwrap();
-        assert!(teacher.system_prompt.contains("uma frase por vez") || teacher.system_prompt.contains("frase-alvo"));
+        assert!(
+            teacher.system_prompt.contains("uma frase por vez")
+                || teacher.system_prompt.contains("frase-alvo")
+        );
     }
 
     #[test]
@@ -272,10 +278,8 @@ mod tests {
 
     #[test]
     fn profile_deserializes_from_minimal_toml_with_defaults() {
-        let profile: Profile = toml::from_str(
-            "id = \"x\"\nname = \"X\"\nsystem_prompt = \"seja X\"\n",
-        )
-        .unwrap();
+        let profile: Profile =
+            toml::from_str("id = \"x\"\nname = \"X\"\nsystem_prompt = \"seja X\"\n").unwrap();
         assert_eq!(profile.voice, "Puck");
         assert_eq!(profile.fx_amount, 0.35);
         assert_eq!(profile.description, "");
@@ -293,10 +297,9 @@ mod tests {
         );
         assert!(tools("english_teacher").is_empty());
         assert!(tools("therapist").is_empty());
-        let custom: Profile = toml::from_str(
-            "id = \"x\"\nname = \"X\"\nsystem_prompt = \"y\"\ntools = [\"fs.*\"]\n",
-        )
-        .unwrap();
+        let custom: Profile =
+            toml::from_str("id = \"x\"\nname = \"X\"\nsystem_prompt = \"y\"\ntools = [\"fs.*\"]\n")
+                .unwrap();
         assert_eq!(custom.tools, ["fs.*"]);
     }
 }

@@ -61,16 +61,16 @@ impl Tool for WebOpen {
 pub(super) fn normalize_url(raw: &str) -> Result<String, ToolError> {
     let raw = raw.trim();
     if raw.is_empty() || raw.chars().any(|c| c.is_whitespace() || c.is_control()) {
-        return Err(ToolError::InvalidArgs(format!("endereço inválido: {raw}")));
+        return Err(ToolError::InvalidArgs("endereço inválido".into()));
     }
     let lower = raw.to_ascii_lowercase();
     if lower.starts_with("http://") || lower.starts_with("https://") {
         return Ok(raw.to_string());
     }
     if raw.contains("://") || raw.starts_with('-') || !raw.contains('.') {
-        return Err(ToolError::InvalidArgs(format!(
-            "só abro endereços http ou https: {raw}"
-        )));
+        return Err(ToolError::InvalidArgs(
+            "só aceito endereços http ou https".into(),
+        ));
     }
     Ok(format!("https://{raw}"))
 }
@@ -96,7 +96,9 @@ pub(super) fn normalize_browser(raw: Option<&str>) -> Result<Option<String>, Too
         return Ok(None);
     };
     if raw.starts_with('-') || raw.chars().any(char::is_control) {
-        return Err(ToolError::InvalidArgs(format!("navegador inválido: {raw:?}")));
+        return Err(ToolError::InvalidArgs(format!(
+            "navegador inválido: {raw:?}"
+        )));
     }
     let lower = raw.to_lowercase();
     let name = BROWSER_ALIASES
@@ -187,16 +189,40 @@ mod tests {
     fn normaliza_navegador_com_apelidos_e_recusa_flags() {
         assert_eq!(normalize_browser(None).unwrap(), None);
         assert_eq!(normalize_browser(Some("  ")).unwrap(), None);
-        assert_eq!(normalize_browser(Some("Safari")).unwrap().as_deref(), Some("Safari"));
-        assert_eq!(normalize_browser(Some("safari")).unwrap().as_deref(), Some("Safari"));
-        assert_eq!(normalize_browser(Some("chrome")).unwrap().as_deref(), Some("Google Chrome"));
-        assert_eq!(normalize_browser(Some("Google Chrome")).unwrap().as_deref(), Some("Google Chrome"));
-        assert_eq!(normalize_browser(Some("edge")).unwrap().as_deref(), Some("Microsoft Edge"));
-        assert_eq!(normalize_browser(Some("Brave")).unwrap().as_deref(), Some("Brave Browser"));
+        assert_eq!(
+            normalize_browser(Some("Safari")).unwrap().as_deref(),
+            Some("Safari")
+        );
+        assert_eq!(
+            normalize_browser(Some("safari")).unwrap().as_deref(),
+            Some("Safari")
+        );
+        assert_eq!(
+            normalize_browser(Some("chrome")).unwrap().as_deref(),
+            Some("Google Chrome")
+        );
+        assert_eq!(
+            normalize_browser(Some("Google Chrome")).unwrap().as_deref(),
+            Some("Google Chrome")
+        );
+        assert_eq!(
+            normalize_browser(Some("edge")).unwrap().as_deref(),
+            Some("Microsoft Edge")
+        );
+        assert_eq!(
+            normalize_browser(Some("Brave")).unwrap().as_deref(),
+            Some("Brave Browser")
+        );
         // nome desconhecido passa como veio (o SO decide)
-        assert_eq!(normalize_browser(Some("Orion")).unwrap().as_deref(), Some("Orion"));
+        assert_eq!(
+            normalize_browser(Some("Orion")).unwrap().as_deref(),
+            Some("Orion")
+        );
         for bad in ["-a", "--args", "Sa\nfari", "x\u{7}"] {
-            assert!(normalize_browser(Some(bad)).is_err(), "deveria recusar {bad:?}");
+            assert!(
+                normalize_browser(Some(bad)).is_err(),
+                "deveria recusar {bad:?}"
+            );
         }
     }
 
@@ -204,9 +230,15 @@ mod tests {
     #[test]
     fn comando_do_mac_usa_open_a_quando_ha_navegador() {
         let args = |cmd: tokio::process::Command| -> Vec<String> {
-            cmd.as_std().get_args().map(|a| a.to_string_lossy().into_owned()).collect()
+            cmd.as_std()
+                .get_args()
+                .map(|a| a.to_string_lossy().into_owned())
+                .collect()
         };
-        assert_eq!(args(open_command("https://google.com", None)), vec!["https://google.com"]);
+        assert_eq!(
+            args(open_command("https://google.com", None)),
+            vec!["https://google.com"]
+        );
         assert_eq!(
             args(open_command("https://google.com", Some("Safari"))),
             vec!["-a", "Safari", "https://google.com"]
