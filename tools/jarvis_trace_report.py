@@ -281,13 +281,56 @@ def report(turns: list[Turn]) -> str:
     return "\n".join(lines)
 
 
+def aceitacao(turns: list[Turn]) -> tuple[list[tuple[bool, str]], bool]:
+    """Os critérios da missão, checados por máquina.
+
+    O loop de autoaprimoramento precisa saber sozinho quando parar. Olho humano
+    lendo relatório não serve: foi assim que a rodada 2 passou por "0 recusas"
+    tendo duas dentro.
+    """
+    dups = [d for tr in turns for d in duplicates(tr)]
+    fails = [t for tr in turns for t in tr.tools.values() if t.erro]
+    recusas = [tr for tr in turns if recusa("".join(tr.model))]
+
+    checks: list[tuple[bool, str]] = [
+        (not dups, f"duplicatas = {len(dups)} (esperado 0)"),
+        (not fails, f"falhas de tool = {len(fails)} (esperado 0)"),
+        (not recusas, f"recusas do modelo = {len(recusas)} (esperado 0)"),
+    ]
+
+    # Item 6 do roteiro: a mesma fala repetida tem de sair pelo reflexo na
+    # segunda vez — é o que prova que a memória do reflexo está sendo usada.
+    falas: dict[str, list[Turn]] = {}
+    for tr in turns:
+        fala = ' '.join(tr.user).strip()
+        if fala:
+            falas.setdefault(fala, []).append(tr)
+    for fala, repetidos in falas.items():
+        if len(repetidos) < 2:
+            continue
+        segunda = repetidos[1]
+        origens = {t.origem for t in segunda.tools.values()}
+        ok = "reflexo" in origens
+        checks.append((ok, f'fala repetida "{fala[:40]}" — 2ª vez por {sorted(origens) or ["ninguém"]} (esperado reflexo)'))
+
+    return checks, all(ok for ok, _ in checks)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("log")
     ap.add_argument("--since", help="ISO parcial, ex.: 2026-09-18T19:37")
+    ap.add_argument("--aceitacao", action="store_true",
+                    help="checa os critérios da missão e sai 1 se algum falhar")
     args = ap.parse_args()
     with open(args.log, encoding="utf-8", errors="replace") as f:
         turns = parse(f.readlines(), args.since)
+    if args.aceitacao:
+        checks, passou = aceitacao(turns)
+        for ok, texto in checks:
+            print(f"[{'PASSA' if ok else 'FALHA'}] {texto}")
+        print("\nROTEIRO PASSOU" if passou else "\nROTEIRO NÃO PASSOU")
+        return 0 if passou else 1
     print(report(turns))
     return 0
 
