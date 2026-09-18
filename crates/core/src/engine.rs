@@ -16,7 +16,7 @@ use std::time::{Duration, Instant};
 
 use thiserror::Error;
 use tokio::sync::{broadcast, mpsc, oneshot, watch};
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 use crate::audio::aec::EchoCanceller;
 use crate::audio::capture::{self, CaptureError, CaptureHandle};
@@ -560,6 +560,8 @@ impl Default for ToolTimeouts {
 struct Finished {
     call: ToolCall,
     result: ToolResult,
+    /// Quanto a execução levou (sem contar espera por confirmação).
+    elapsed: Duration,
 }
 
 /// Ação feita pelo reflexo há pouco: uma chamada igual do modelo dentro de
@@ -919,6 +921,7 @@ impl Worker {
                 self.update_state();
             }
             Some(ServerEvent::UserText(text)) => {
+                debug!(texto = %text, "usuário disse");
                 if let Some(r) = self.recorder.as_mut() {
                     r.event("user_text", &text);
                 }
@@ -932,6 +935,7 @@ impl Worker {
                 self.emit.send(EngineEvent::UserText(text));
             }
             Some(ServerEvent::ModelText(text)) => {
+                debug!(texto = %text, "modelo disse");
                 if let Some(r) = self.recorder.as_mut() {
                     r.event("model_text", &text);
                 }
@@ -942,6 +946,7 @@ impl Worker {
                 self.emit.send(EngineEvent::ModelText(text));
             }
             Some(ServerEvent::TurnComplete) => {
+                debug!("turno do modelo concluído");
                 if let Some(r) = self.recorder.as_mut() {
                     r.event("turn_complete", "");
                 }
@@ -1127,6 +1132,7 @@ impl Worker {
             // Já aprovada nesta sessão, liberada para sempre ou só leitura.
             risk = Risk::Safe;
         }
+        info!(id = %call.id, ferramenta = %call.name, risco = ?risk, pedido = %summary, "tool pedida pelo modelo");
         if let Some(r) = self.recorder.as_mut() {
             r.event("tool_call", format!("{} [{risk:?}] {summary}", call.id));
         }
@@ -1470,6 +1476,7 @@ impl Worker {
         let id = call.id.clone();
         let name = call.name.clone();
         let task = tokio::spawn(async move {
+            let t0 = Instant::now();
             let result = match tokio::time::timeout(limit, registry.call(&call)).await {
                 Ok(result) => result,
                 Err(_) => ToolResult::err(
@@ -1477,7 +1484,7 @@ impl Worker {
                     format!("{} ({}s): a ação não terminou", ToolError::Timeout, limit.as_secs()),
                 ),
             };
-            let _ = done.send(Finished { call, result });
+            let _ = done.send(Finished { call, result, elapsed: t0.elapsed() });
         });
         self.running.insert(id, (name, task.abort_handle()));
     }
@@ -1486,7 +1493,25 @@ impl Worker {
         // Cancelada no meio do caminho: o servidor não quer mais a resposta.
         if self.running.remove(&done.result.id).is_none() {
             self.pending_learn.remove(&done.result.id);
+            debug!(id = %done.result.id, ferramenta = %done.call.name, "tool terminou depois de cancelada");
             return;
+        }
+        let origem = if done.result.id.starts_with(crate::reflex::decide::REFLEX_CALL_PREFIX) {
+            "reflexo"
+        } else {
+            "modelo"
+        };
+        let ms = done.elapsed.as_millis() as u64;
+        match done.result.error.as_deref() {
+            Some(err) => warn!(
+                id = %done.result.id, ferramenta = %done.call.name, origem, ms, erro = %err,
+                "tool falhou"
+            ),
+            None => info!(
+                id = %done.result.id, ferramenta = %done.call.name, origem, ms,
+                resultado = %engine_tools::result_summary(&done.result.output, None),
+                "tool concluída"
+            ),
         }
         if !done
             .result
