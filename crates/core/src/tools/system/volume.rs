@@ -1,4 +1,4 @@
-//! `sys.volume`: lê, ajusta (0–100) e silencia o volume de saída.
+//! `sys.volume`: lê, ajusta (0–100, ou ±10 com up/down) e silencia o volume de saída.
 
 use async_trait::async_trait;
 use serde_json::{json, Value};
@@ -12,6 +12,10 @@ const NAME: &str = "sys.volume";
 pub enum VolumeAction {
     Get,
     Set(u8),
+    /// Soma 10 ao volume atual (o macOS satura em 100).
+    Up,
+    /// Tira 10 do volume atual (o macOS satura em 0).
+    Down,
     Mute,
     Unmute,
 }
@@ -21,6 +25,8 @@ impl VolumeAction {
         let action = required_str(args, "action")?;
         match action.as_str() {
             "get" => Ok(Self::Get),
+            "up" => Ok(Self::Up),
+            "down" => Ok(Self::Down),
             "mute" => Ok(Self::Mute),
             "unmute" => Ok(Self::Unmute),
             "set" => {
@@ -36,7 +42,7 @@ impl VolumeAction {
                 Ok(Self::Set(level.round() as u8))
             }
             other => Err(ToolError::InvalidArgs(format!(
-                "`action` desconhecida `{other}`; use get, set, mute ou unmute"
+                "`action` desconhecida `{other}`; use get, set, up, down, mute ou unmute"
             ))),
         }
     }
@@ -47,6 +53,10 @@ impl VolumeAction {
                           return (output volume of s as text) & \",\" & (output muted of s as text)"
                 .to_string(),
             Self::Set(level) => format!("set volume output volume {level}"),
+            Self::Up => "set volume output volume ((output volume of (get volume settings)) + 10)"
+                .to_string(),
+            Self::Down => "set volume output volume ((output volume of (get volume settings)) - 10)"
+                .to_string(),
             Self::Mute => "set volume with output muted".to_string(),
             Self::Unmute => "set volume without output muted".to_string(),
         }
@@ -71,15 +81,15 @@ impl Tool for SysVolume {
     fn spec(&self) -> ToolSpec {
         ToolSpec {
             name: NAME.into(),
-            description: "Lê ou ajusta o volume de saída do computador (0 a 100) e liga/desliga o mudo."
+            description: "Lê ou ajusta o volume de saída do computador (0 a 100, ou 10 pontos para cima/baixo) e liga/desliga o mudo."
                 .into(),
             parameters: json!({
                 "type": "object",
                 "properties": {
                     "action": {
                         "type": "string",
-                        "enum": ["get", "set", "mute", "unmute"],
-                        "description": "get lê o volume; set ajusta para `level`; mute/unmute silenciam ou reativam o som."
+                        "enum": ["get", "set", "up", "down", "mute", "unmute"],
+                        "description": "get lê o volume; set ajusta para `level`; up/down sobem ou descem 10 pontos; mute/unmute silenciam ou reativam o som."
                     },
                     "level": {
                         "type": "integer", "minimum": 0, "maximum": 100,
@@ -98,6 +108,11 @@ impl Tool for SysVolume {
         match action {
             VolumeAction::Get => parse_get_output(&out),
             VolumeAction::Set(level) => Ok(json!({ "level": level })),
+            VolumeAction::Up | VolumeAction::Down => {
+                // Devolve o nível resultante para o modelo saber onde ficou.
+                let out = run_osascript(NAME, &VolumeAction::Get.applescript()).await?;
+                parse_get_output(&out)
+            }
             VolumeAction::Mute => Ok(json!({ "muted": true })),
             VolumeAction::Unmute => Ok(json!({ "muted": false })),
         }
@@ -164,5 +179,25 @@ mod tests {
         let spec = SysVolume.spec();
         assert_eq!(spec.name, "sys.volume");
         assert_eq!(spec.risk, Risk::Safe);
+    }
+
+    #[test]
+    fn aceita_up_e_down() {
+        assert_eq!(VolumeAction::from_args(&json!({"action": "up"})).unwrap(), VolumeAction::Up);
+        assert_eq!(
+            VolumeAction::from_args(&json!({"action": "down"})).unwrap(),
+            VolumeAction::Down
+        );
+        assert_eq!(
+            VolumeAction::Up.applescript(),
+            "set volume output volume ((output volume of (get volume settings)) + 10)"
+        );
+        assert_eq!(
+            VolumeAction::Down.applescript(),
+            "set volume output volume ((output volume of (get volume settings)) - 10)"
+        );
+        let spec = SysVolume.spec();
+        let actions = spec.parameters["properties"]["action"]["enum"].clone();
+        assert_eq!(actions, json!(["get", "set", "up", "down", "mute", "unmute"]));
     }
 }

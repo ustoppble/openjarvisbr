@@ -4,8 +4,11 @@
 
 use std::collections::BTreeSet;
 
+use serde_json::json;
+
 use super::eye::Inventory;
-use super::questions::{Question, Questions};
+use super::questions::{Answers, Question, Questions};
+use crate::tools::ToolCall;
 
 pub const MAX_CANDIDATES: usize = 40;
 pub const NONE: &str = "none";
@@ -150,6 +153,96 @@ pub fn build_questions(s: &Situation) -> Option<Questions> {
     Some(q)
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct Thresholds {
+    pub act: f32,
+    pub confirm: f32,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum Decision {
+    Act(ToolCall),
+    Approve,
+    Deny,
+    AlwaysAllow,
+    Nothing,
+}
+
+pub const REFLEX_CALL_PREFIX: &str = "reflex-";
+
+fn new_call(name: &str, args: serde_json::Value) -> ToolCall {
+    static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    let n = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    ToolCall { id: format!("{REFLEX_CALL_PREFIX}{n}"), name: name.to_string(), args }
+}
+
+/// Primeiro inteiro 0..=100 da fala.
+pub fn volume_level(heard: &str) -> Option<u8> {
+    normalize(heard)
+        .split(' ')
+        .filter_map(|t| t.parse::<u32>().ok())
+        .find(|n| *n <= 100)
+        .map(|n| n as u8)
+}
+
+/// Escolha `id` com opção ≠ none e probabilidade ≥ limiar.
+fn confident_pick<'a>(a: &'a Answers, id: &str, min: f32) -> Option<&'a str> {
+    let (pick, _) = a.choice(id)?;
+    if pick == NONE {
+        return None;
+    }
+    let p = a.probability(id, pick).unwrap_or(0.0);
+    (p >= min).then_some(pick)
+}
+
+pub fn decide(s: &Situation, a: &Answers, t: &Thresholds) -> Decision {
+    if a.noul("always").unwrap_or(0.0) >= t.confirm {
+        return Decision::AlwaysAllow;
+    }
+    if s.pending_confirm {
+        let approve = a.noul("approve").unwrap_or(0.0);
+        let deny = a.noul("deny").unwrap_or(0.0);
+        if approve >= t.confirm && deny < 0.5 {
+            return Decision::Approve;
+        }
+        if deny >= t.confirm && approve < 0.5 {
+            return Decision::Deny;
+        }
+    }
+    if s.turn_locked {
+        return Decision::Nothing;
+    }
+    let Some(intent) = confident_pick(a, "intent", t.act) else {
+        return Decision::Nothing;
+    };
+    match intent {
+        "open_app" => match confident_pick(a, "app", t.act) {
+            Some(name) => Decision::Act(new_call("app.open", json!({ "name": name }))),
+            None => Decision::Nothing,
+        },
+        "open_site" => {
+            let Some(name) = confident_pick(a, "site", t.act) else { return Decision::Nothing };
+            match s.inventory.sites.iter().find(|site| site.name == name) {
+                Some(site) => Decision::Act(new_call("web.open", json!({ "url": site.url }))),
+                None => Decision::Nothing,
+            }
+        }
+        "media" => match confident_pick(a, "media", t.act) {
+            Some(action) => Decision::Act(new_call("media.control", json!({ "action": action }))),
+            None => Decision::Nothing,
+        },
+        "volume" => match confident_pick(a, "volume", t.act) {
+            Some("set") => match volume_level(s.heard) {
+                Some(level) => Decision::Act(new_call("sys.volume", json!({ "action": "set", "level": level }))),
+                None => Decision::Nothing,
+            },
+            Some(action) => Decision::Act(new_call("sys.volume", json!({ "action": action }))),
+            None => Decision::Nothing,
+        },
+        _ => Decision::Nothing,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -254,5 +347,155 @@ mod tests {
         let q = build_questions(&s).unwrap();
         assert!(!q.0.contains_key("app"));
         assert!(q.0.contains_key("volume"));
+    }
+
+    use crate::reflex::questions::Answer;
+    use std::collections::BTreeMap;
+
+    fn t() -> Thresholds { Thresholds { act: 0.85, confirm: 0.85 } }
+
+    fn choice(a: &mut Answers, id: &str, pick: &str, p: f32) {
+        let mut probs = BTreeMap::new();
+        probs.insert(pick.to_string(), p);
+        probs.insert(NONE.to_string(), 1.0 - p);
+        a.answers.insert(id.into(), Answer::Choice { choice: pick.into(), probabilities: probs, confidence: p });
+    }
+    fn noul(a: &mut Answers, id: &str, v: f32) {
+        a.answers.insert(id.into(), Answer::Noul { noul: v });
+    }
+
+    #[test]
+    fn abre_app_com_confianca() {
+        let i = inv(&["Safari"], &[]);
+        let s = Situation { heard: "abre o safari", inventory: &i, pending_confirm: false, turn_locked: false };
+        let mut a = Answers::default();
+        choice(&mut a, "intent", "open_app", 0.95);
+        choice(&mut a, "app", "Safari", 0.97);
+        match decide(&s, &a, &t()) {
+            Decision::Act(call) => {
+                assert_eq!(call.name, "app.open");
+                assert_eq!(call.args, json!({"name": "Safari"}));
+                assert!(call.id.starts_with(REFLEX_CALL_PREFIX));
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn limiar_exato_age_e_abaixo_nao() {
+        let i = inv(&["Safari"], &[]);
+        let s = Situation { heard: "abre o safari", inventory: &i, pending_confirm: false, turn_locked: false };
+        let mut a = Answers::default();
+        choice(&mut a, "intent", "open_app", 0.85);
+        choice(&mut a, "app", "Safari", 0.85);
+        assert!(matches!(decide(&s, &a, &t()), Decision::Act(_)));
+        let mut b = Answers::default();
+        choice(&mut b, "intent", "open_app", 0.95);
+        choice(&mut b, "app", "Safari", 0.84);
+        assert!(matches!(decide(&s, &b, &t()), Decision::Nothing));
+    }
+
+    #[test]
+    fn alvo_none_nao_age() {
+        let i = inv(&["Safari"], &[]);
+        let s = Situation { heard: "abre aí", inventory: &i, pending_confirm: false, turn_locked: false };
+        let mut a = Answers::default();
+        choice(&mut a, "intent", "open_app", 0.95);
+        choice(&mut a, "app", NONE, 0.9);
+        assert!(matches!(decide(&s, &a, &t()), Decision::Nothing));
+    }
+
+    #[test]
+    fn site_so_da_lista_com_url_do_config() {
+        let i = inv(&[], &[]);
+        let s = Situation { heard: "abre o youtube", inventory: &i, pending_confirm: false, turn_locked: false };
+        let mut a = Answers::default();
+        choice(&mut a, "intent", "open_site", 0.95);
+        choice(&mut a, "site", "YouTube", 0.95);
+        match decide(&s, &a, &t()) {
+            Decision::Act(call) => {
+                assert_eq!(call.name, "web.open");
+                assert_eq!(call.args, json!({"url": "https://youtube.com"}));
+            }
+            other => panic!("{other:?}"),
+        }
+        let mut b = Answers::default();
+        choice(&mut b, "intent", "open_site", 0.95);
+        choice(&mut b, "site", "Globo", 0.95); // não está no config
+        assert!(matches!(decide(&s, &b, &t()), Decision::Nothing));
+    }
+
+    #[test]
+    fn midia_e_volume() {
+        let i = inv(&[], &[]);
+        let s = Situation { heard: "próxima música", inventory: &i, pending_confirm: false, turn_locked: false };
+        let mut a = Answers::default();
+        choice(&mut a, "intent", "media", 0.95);
+        choice(&mut a, "media", "next", 0.95);
+        assert!(matches!(decide(&s, &a, &t()), Decision::Act(c) if c.name == "media.control" && c.args == json!({"action": "next"})));
+
+        let s2 = Situation { heard: "coloca o volume em 30", inventory: &i, pending_confirm: false, turn_locked: false };
+        let mut b = Answers::default();
+        choice(&mut b, "intent", "volume", 0.95);
+        choice(&mut b, "volume", "set", 0.95);
+        assert!(matches!(decide(&s2, &b, &t()), Decision::Act(c) if c.args == json!({"action": "set", "level": 30})));
+
+        let s3 = Situation { heard: "aumenta o volume", inventory: &i, pending_confirm: false, turn_locked: false };
+        let mut c = Answers::default();
+        choice(&mut c, "intent", "volume", 0.95);
+        choice(&mut c, "volume", "up", 0.95);
+        assert!(matches!(decide(&s3, &c, &t()), Decision::Act(c) if c.args == json!({"action": "up"})));
+
+        // set sem número na fala: nada
+        let s4 = Situation { heard: "coloca o volume", inventory: &i, pending_confirm: false, turn_locked: false };
+        assert!(matches!(decide(&s4, &b, &t()), Decision::Nothing));
+    }
+
+    #[test]
+    fn confirmacao_por_voz() {
+        let i = inv(&[], &[]);
+        let s = Situation { heard: "pode ir", inventory: &i, pending_confirm: true, turn_locked: false };
+        let mut a = Answers::default();
+        noul(&mut a, "approve", 0.9); noul(&mut a, "deny", 0.1); noul(&mut a, "always", 0.0);
+        assert!(matches!(decide(&s, &a, &t()), Decision::Approve));
+        let mut b = Answers::default();
+        noul(&mut b, "approve", 0.1); noul(&mut b, "deny", 0.92); noul(&mut b, "always", 0.0);
+        assert!(matches!(decide(&s, &b, &t()), Decision::Deny));
+        // empate: nada
+        let mut c = Answers::default();
+        noul(&mut c, "approve", 0.9); noul(&mut c, "deny", 0.6);
+        assert!(matches!(decide(&s, &c, &t()), Decision::Nothing));
+        // sem pendente, approve alto é ignorado
+        let s2 = Situation { heard: "pode ir", inventory: &i, pending_confirm: false, turn_locked: false };
+        assert!(matches!(decide(&s2, &a, &t()), Decision::Nothing));
+    }
+
+    #[test]
+    fn sempre_pode_vence_o_resto() {
+        let i = inv(&["Safari"], &[]);
+        let s = Situation { heard: "sempre pode abrir", inventory: &i, pending_confirm: true, turn_locked: false };
+        let mut a = Answers::default();
+        noul(&mut a, "always", 0.9); noul(&mut a, "approve", 0.9); noul(&mut a, "deny", 0.0);
+        choice(&mut a, "intent", "open_app", 0.99);
+        choice(&mut a, "app", "Safari", 0.99);
+        assert!(matches!(decide(&s, &a, &t()), Decision::AlwaysAllow));
+    }
+
+    #[test]
+    fn turno_travado_nunca_age() {
+        let i = inv(&["Safari"], &[]);
+        let s = Situation { heard: "abre o safari", inventory: &i, pending_confirm: false, turn_locked: true };
+        let mut a = Answers::default();
+        choice(&mut a, "intent", "open_app", 0.99);
+        choice(&mut a, "app", "Safari", 0.99);
+        assert!(matches!(decide(&s, &a, &t()), Decision::Nothing));
+    }
+
+    #[test]
+    fn extrai_nivel_de_volume() {
+        assert_eq!(volume_level("coloca o volume em 30"), Some(30));
+        assert_eq!(volume_level("volume 100 por cento"), Some(100));
+        assert_eq!(volume_level("volume em 250"), None);
+        assert_eq!(volume_level("aumenta o volume"), None);
     }
 }
