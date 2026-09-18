@@ -179,7 +179,6 @@ impl Judge for JevClient {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -220,7 +219,10 @@ mod tests {
         assert!(matches!(classify(429, "{}"), Err(JudgeError::RateLimited)));
         assert!(matches!(classify(529, "{}"), Err(JudgeError::Overloaded)));
         assert!(matches!(classify(500, "boom"), Err(JudgeError::Http(m)) if m.contains("500")));
-        assert!(matches!(classify(200, "não é json"), Err(JudgeError::Parse(_))));
+        assert!(matches!(
+            classify(200, "não é json"),
+            Err(JudgeError::Parse(_))
+        ));
     }
 
     #[test]

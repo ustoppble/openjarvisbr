@@ -14,7 +14,7 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use tokio::sync::mpsc;
+use tokio::sync::{broadcast, mpsc};
 use tokio::task::JoinHandle;
 use tracing::{debug, info, warn};
 
@@ -25,7 +25,7 @@ pub use judge::Judge;
 pub use memory::{LearnedAction, Memory};
 
 use decide::{build_questions, decide, Situation};
-use judge::JudgeError;
+use judge::{JudgeError, JEV_TIMEOUT};
 use questions::Answers;
 
 /// Uma decisão pronta para o engine, com telemetria.
@@ -36,6 +36,27 @@ pub struct Outcome {
     pub confidence: f32,
 }
 
+/// Sinal seguro para consumidores mostrarem a saúde do reflexo sem expor
+/// detalhes do transporte nem credenciais.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UnavailableReason {
+    Timeout,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReflexStatus {
+    Retrying {
+        reason: UnavailableReason,
+        attempt: u8,
+        budget_ms: u32,
+    },
+    Unavailable {
+        reason: UnavailableReason,
+        attempts: u8,
+        latency_ms: u32,
+    },
+}
+
 /// Contadores acumulados enquanto esta instância do reflexo vive.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct SessionStats {
@@ -43,6 +64,8 @@ pub struct SessionStats {
     pub act: u64,
     pub nothing: u64,
     pub skipped_judge: u64,
+    pub retries: u64,
+    pub unavailable: u64,
     pub total_latency_ms: u64,
 }
 
@@ -52,8 +75,13 @@ impl SessionStats {
     }
 }
 
-/// Pergunta em voo há menos que isto é cancelada quando chega fragmento novo.
-const CANCEL_IF_YOUNGER_THAN: Duration = Duration::from_millis(200);
+/// Segunda tentativa após timeout. A chamada normal leva 300–500 ms no trace;
+/// o teto curto evita que a retentativa atravesse a próxima fala do roteiro.
+const TIMEOUT_RETRY_BUDGET: Duration = Duration::from_millis(500);
+/// Uma fala mais nova substitui qualquer pergunta que ainda esteja dentro do
+/// orçamento completo (tentativa normal + retentativa), não só nos 200 ms
+/// iniciais. Isso evita que respostas obsoletas atravessem falas em rajada.
+const CANCEL_IF_YOUNGER_THAN: Duration = JEV_TIMEOUT.saturating_add(TIMEOUT_RETRY_BUDGET);
 /// Erros seguidos de cota/sobrecarga (429/529) até pausar.
 const BACKOFF_AFTER: u32 = 3;
 const BACKOFF_FOR: Duration = Duration::from_secs(30);
@@ -72,6 +100,7 @@ pub struct Reflex {
     judge: Arc<dyn Judge>,
     eye: EyeHandle,
     tx: mpsc::UnboundedSender<Outcome>,
+    status_tx: broadcast::Sender<ReflexStatus>,
     /// Já agiu neste turno.
     locked: Arc<AtomicBool>,
     /// Desligado de vez (401) até reiniciar.
@@ -99,11 +128,13 @@ impl Reflex {
         eye: EyeHandle,
     ) -> (Self, mpsc::UnboundedReceiver<Outcome>) {
         let (tx, rx) = mpsc::unbounded_channel();
+        let (status_tx, _) = broadcast::channel(16);
         let reflex = Self {
             settings,
             judge,
             eye,
             tx,
+            status_tx,
             locked: Arc::new(AtomicBool::new(false)),
             dead: Arc::new(AtomicBool::new(false)),
             quota_errors: Arc::new(AtomicU32::new(0)),
@@ -142,13 +173,29 @@ impl Reflex {
         *self.stats.lock().unwrap_or_else(|e| e.into_inner())
     }
 
+    /// Eventos de saúde para o engine/UI, independentes das decisões.
+    pub fn subscribe_status(&self) -> broadcast::Receiver<ReflexStatus> {
+        self.status_tx.subscribe()
+    }
+
     /// Fragmento novo da fala do usuário (acumulada no turno).
     pub fn hear(&self, heard: String, pending_confirm: bool) {
+        // Descarte sem rastro é o pior caso: a fala some, o modelo age no lugar
+        // e o resumo da sessão nem conta a rodada. Foi assim que o segundo
+        // "abre a globo" ficou três medições sendo atribuído à regra de decisão
+        // e ao timeout do Jev, que não tinham nada a ver (JRV-105).
         if !self.enabled() {
+            debug!(fala = %heard, "reflexo descartou a fala: reflexo desligado");
             return;
         }
         if let Some(until) = *self.paused_until.lock().unwrap_or_else(|e| e.into_inner()) {
-            if Instant::now() < until {
+            let agora = Instant::now();
+            if agora < until {
+                debug!(
+                    fala = %heard,
+                    falta_ms = (until - agora).as_millis() as u64,
+                    "reflexo descartou a fala: pausado"
+                );
                 return;
             }
         }
@@ -156,6 +203,14 @@ impl Reflex {
             let mut slot = self.pending.lock().unwrap_or_else(|e| e.into_inner());
             if let Some(prev) = slot.take() {
                 if prev.started.elapsed() < CANCEL_IF_YOUNGER_THAN {
+                    // A decisão anterior foi deliberadamente supersedida por
+                    // texto mais recente; deixa rastro para não parecer falha
+                    // do juiz ou da regra de decisão (JRV-105).
+                    debug!(
+                        fala_nova = %heard,
+                        idade_ms = prev.started.elapsed().as_millis() as u64,
+                        "reflexo cancelou a decisão em voo da fala anterior"
+                    );
                     prev.task.abort();
                 }
                 // mais velha que isso: deixa terminar (o resultado ainda vale)
@@ -164,6 +219,7 @@ impl Reflex {
         let judge = Arc::clone(&self.judge);
         let eye = self.eye.clone();
         let tx = self.tx.clone();
+        let status_tx = self.status_tx.clone();
         let locked = Arc::clone(&self.locked);
         let dead = Arc::clone(&self.dead);
         let quota = Arc::clone(&self.quota_errors);
@@ -194,17 +250,48 @@ impl Reflex {
                         &Decision::Nothing,
                         decision_started.elapsed().as_millis() as u32,
                         true,
+                        &heard,
                     );
                 }
                 return;
             };
-            match judge.ask(&heard, &questions).await {
+            let mut attempts = 1_u8;
+            let first = judge.ask(&heard, &questions).await;
+            let result = if matches!(first, Err(JudgeError::Timeout)) {
+                attempts = 2;
+                {
+                    let mut stats = stats.lock().unwrap_or_else(|e| e.into_inner());
+                    stats.retries += 1;
+                }
+                debug!(
+                    attempt = attempts,
+                    budget_ms = TIMEOUT_RETRY_BUDGET.as_millis() as u64,
+                    "reflexo retenta após timeout do Jev"
+                );
+                let _ = status_tx.send(ReflexStatus::Retrying {
+                    reason: UnavailableReason::Timeout,
+                    attempt: attempts,
+                    budget_ms: TIMEOUT_RETRY_BUDGET.as_millis() as u32,
+                });
+                match tokio::time::timeout(
+                    TIMEOUT_RETRY_BUDGET,
+                    judge.ask(&heard, &questions),
+                )
+                .await
+                {
+                    Ok(result) => result,
+                    Err(_) => Err(JudgeError::Timeout),
+                }
+            } else {
+                first
+            };
+            match result {
                 Ok(answers) => {
                     quota.store(0, Ordering::Relaxed);
                     let latency_ms = decision_started.elapsed().as_millis() as u32;
                     let decision = decide(&situation, &answers, &thresholds);
                     let confidence = confidence_of(&decision, &answers);
-                    record_decision(&stats, &decision, latency_ms, false);
+                    record_decision(&stats, &decision, latency_ms, false, &heard);
                     if matches!(decision, Decision::Nothing) {
                         return;
                     }
@@ -231,7 +318,21 @@ impl Reflex {
                         quota.store(0, Ordering::Relaxed);
                     }
                 }
-                Err(err) => debug!(%err, "reflexo pulou esta rodada"),
+                Err(err @ JudgeError::Timeout) => {
+                    let latency_ms = decision_started.elapsed().as_millis() as u32;
+                    let _ = status_tx.send(ReflexStatus::Unavailable {
+                        reason: UnavailableReason::Timeout,
+                        attempts,
+                        latency_ms,
+                    });
+                    record_unavailable(
+                        &stats,
+                        &err,
+                        latency_ms,
+                        attempts,
+                    );
+                }
+                Err(err) => debug!(%err, attempts, "reflexo pulou esta rodada"),
             }
         });
         *self.pending.lock().unwrap_or_else(|e| e.into_inner()) = Some(InFlight {
@@ -251,6 +352,11 @@ fn record_decision(
     decision: &Decision,
     latency_ms: u32,
     skipped_judge: bool,
+    // A fala julgada é o `user_heard` ACUMULADO do turno, não o fragmento que
+    // o engine imprime em "usuário disse". Quando os turnos se atropelam, o
+    // reflexo julga texto grudado ("abre a globoabre a globo") e não reconhece
+    // a ação aprendida. Sem isso no trace o diagnóstico vira chute (JRV-105).
+    fala: &str,
 ) {
     let snapshot = {
         let mut stats = stats.lock().unwrap_or_else(|e| e.into_inner());
@@ -258,7 +364,7 @@ fn record_decision(
             Decision::Act(_) => stats.act += 1,
             Decision::Nothing => stats.nothing += 1,
             _ => {
-                debug!(?decision, latency_ms, skipped_judge, "reflexo");
+                debug!(?decision, latency_ms, skipped_judge, fala, "reflexo");
                 return;
             }
         }
@@ -269,12 +375,40 @@ fn record_decision(
         }
         *stats
     };
-    debug!(?decision, latency_ms, skipped_judge, "reflexo");
+    debug!(?decision, latency_ms, skipped_judge, fala, "reflexo");
     info!(
         total = snapshot.total,
         act = snapshot.act,
         nothing = snapshot.nothing,
         skipped_judge = snapshot.skipped_judge,
+        retries = snapshot.retries,
+        unavailable = snapshot.unavailable,
+        average_latency_ms = snapshot.average_latency_ms(),
+        "resumo do reflexo na sessão"
+    );
+}
+
+fn record_unavailable(
+    stats: &Arc<Mutex<SessionStats>>,
+    err: &JudgeError,
+    latency_ms: u32,
+    attempts: u8,
+) {
+    let snapshot = {
+        let mut stats = stats.lock().unwrap_or_else(|e| e.into_inner());
+        stats.total += 1;
+        stats.unavailable += 1;
+        stats.total_latency_ms += u64::from(latency_ms);
+        *stats
+    };
+    debug!(%err, attempts, latency_ms, "reflexo pulou esta rodada");
+    info!(
+        total = snapshot.total,
+        act = snapshot.act,
+        nothing = snapshot.nothing,
+        skipped_judge = snapshot.skipped_judge,
+        retries = snapshot.retries,
+        unavailable = snapshot.unavailable,
         average_latency_ms = snapshot.average_latency_ms(),
         "resumo do reflexo na sessão"
     );
@@ -301,12 +435,54 @@ mod tests {
     use crate::reflex::judge::{FakeJudge, JudgeError};
     use crate::reflex::questions::{Answer, Answers};
     use std::collections::BTreeMap;
+    use std::sync::atomic::AtomicUsize;
     use std::time::Duration;
 
     struct NoProbe;
     impl RunningProbe for NoProbe {
         fn running_app_names(&self) -> Vec<String> {
             vec![]
+        }
+    }
+
+    struct TimeoutThenSlow {
+        calls: AtomicUsize,
+        delay: Duration,
+    }
+
+    struct StateJudge {
+        delay: Duration,
+    }
+
+    #[async_trait::async_trait]
+    impl Judge for TimeoutThenSlow {
+        async fn ask(
+            &self,
+            _state: &str,
+            _questions: &crate::reflex::questions::Questions,
+        ) -> Result<Answers, JudgeError> {
+            if self.calls.fetch_add(1, Ordering::SeqCst) == 0 {
+                Err(JudgeError::Timeout)
+            } else {
+                tokio::time::sleep(self.delay).await;
+                Ok(open_safari())
+            }
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl Judge for StateJudge {
+        async fn ask(
+            &self,
+            state: &str,
+            _questions: &crate::reflex::questions::Questions,
+        ) -> Result<Answers, JudgeError> {
+            tokio::time::sleep(self.delay).await;
+            Ok(if state.contains("youtube") {
+                open_youtube()
+            } else {
+                open_safari()
+            })
         }
     }
 
@@ -335,6 +511,24 @@ mod tests {
             a.answers.insert(
                 id.into(),
                 Answer::Choice { choice: pick.into(), probabilities: p, confidence: 0.95 },
+            );
+        }
+        a
+    }
+
+    fn open_youtube() -> Answers {
+        let mut a = Answers::default();
+        for (id, pick) in [("intent", "open_site"), ("site", "YouTube")] {
+            let mut p = BTreeMap::new();
+            p.insert(pick.to_string(), 0.95);
+            p.insert(NONE.to_string(), 0.05);
+            a.answers.insert(
+                id.into(),
+                Answer::Choice {
+                    choice: pick.into(),
+                    probabilities: p,
+                    confidence: 0.95,
+                },
             );
         }
         a
@@ -384,6 +578,104 @@ mod tests {
         reflex.hear("abre o safari".into(), false);
         tokio::time::sleep(Duration::from_millis(150)).await;
         assert!(rx.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn timeout_tenta_uma_vez_e_age_quando_a_retentativa_responde() {
+        let judge = Arc::new(FakeJudge::new());
+        judge.push_err(JudgeError::Timeout);
+        judge.push(open_safari());
+        let (reflex, mut rx) = Reflex::new(settings(), judge.clone(), eye());
+
+        reflex.hear("abre o safari".into(), false);
+
+        let out = tokio::time::timeout(Duration::from_millis(500), rx.recv())
+            .await
+            .expect("a retentativa deve terminar")
+            .expect("o reflexo deve emitir a decisão");
+        assert!(matches!(out.decision, Decision::Act(ref c) if c.name == "app.open"));
+        assert_eq!(judge.calls().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn dois_timeouts_contam_uma_indisponibilidade() {
+        let judge = Arc::new(FakeJudge::new());
+        judge.push_err(JudgeError::Timeout);
+        judge.push_err(JudgeError::Timeout);
+        let (reflex, _rx) = Reflex::new(settings(), judge.clone(), eye());
+        let mut status = reflex.subscribe_status();
+
+        reflex.hear("abre o safari".into(), false);
+        tokio::time::sleep(Duration::from_millis(150)).await;
+
+        assert_eq!(judge.calls().len(), 2);
+        assert_eq!(reflex.stats().total, 1);
+        assert!(matches!(
+            status.try_recv().unwrap(),
+            ReflexStatus::Retrying { attempt: 2, .. }
+        ));
+        assert!(matches!(
+            status.try_recv().unwrap(),
+            ReflexStatus::Unavailable {
+                reason: UnavailableReason::Timeout,
+                attempts: 2,
+                ..
+            }
+        ));
+    }
+
+    #[tokio::test]
+    async fn retentativa_lenta_respeita_o_orcamento_curto() {
+        let judge = Arc::new(TimeoutThenSlow {
+            calls: AtomicUsize::new(0),
+            delay: Duration::from_secs(2),
+        });
+        let (reflex, _rx) = Reflex::new(settings(), judge.clone(), eye());
+        let mut status = reflex.subscribe_status();
+
+        let started = Instant::now();
+        reflex.hear("abre o safari".into(), false);
+        let _retrying = tokio::time::timeout(Duration::from_millis(200), status.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        let unavailable = tokio::time::timeout(Duration::from_millis(700), status.recv())
+            .await
+            .expect("a segunda tentativa deve respeitar o orçamento")
+            .unwrap();
+
+        assert!(matches!(
+            unavailable,
+            ReflexStatus::Unavailable {
+                reason: UnavailableReason::Timeout,
+                attempts: 2,
+                ..
+            }
+        ));
+        assert!(started.elapsed() < Duration::from_millis(650));
+        assert_eq!(judge.calls.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn fala_nova_cancela_pergunta_anterior_dentro_do_orcamento_total() {
+        let judge = Arc::new(StateJudge {
+            delay: Duration::from_millis(350),
+        });
+        let (reflex, mut rx) = Reflex::new(settings(), judge, eye());
+
+        reflex.hear("abre o safari".into(), false);
+        // A chamada normal leva 300–500 ms. Aos 250 ms ela ainda está viva,
+        // mas já escapava do limiar antigo de cancelamento (200 ms).
+        tokio::time::sleep(Duration::from_millis(250)).await;
+        reflex.hear("abre o youtube".into(), false);
+
+        let out = tokio::time::timeout(Duration::from_secs(1), rx.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(matches!(out.decision, Decision::Act(ref c) if c.name == "web.open"));
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        assert!(rx.try_recv().is_err(), "a decisão obsoleta não pode aparecer depois");
     }
 
     #[tokio::test]

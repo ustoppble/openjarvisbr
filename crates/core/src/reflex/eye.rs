@@ -8,8 +8,8 @@ use std::time::{Duration, Instant};
 
 use tracing::warn;
 
-pub use crate::config::SiteConfig;
 pub use super::memory::{LearnedAction, Memory};
+pub use crate::config::SiteConfig;
 use crate::tools::ToolCall;
 
 /// Um app conhecido pelo Olho: nome do bundle (sem `.app`) e se está rodando.
@@ -22,7 +22,11 @@ pub struct AppEntry {
 
 impl AppEntry {
     pub fn installed(name: &str) -> Self {
-        Self { name: name.to_string(), bundle_id: None, running: false }
+        Self {
+            name: name.to_string(),
+            bundle_id: None,
+            running: false,
+        }
     }
 }
 
@@ -88,7 +92,9 @@ pub fn app_name_from_path(path: &Path) -> Option<String> {
 pub fn scan_app_dirs(dirs: &[PathBuf]) -> Vec<AppEntry> {
     let mut names = BTreeSet::new();
     for dir in dirs {
-        let Ok(entries) = std::fs::read_dir(dir) else { continue };
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            continue;
+        };
         for entry in entries.flatten() {
             if let Some(name) = app_name_from_path(&entry.path()) {
                 names.insert(name);
@@ -194,7 +200,10 @@ impl EyeHandle {
 
     /// Cópia da memória corrente.
     pub fn memory(&self) -> Memory {
-        self.memory.lock().unwrap_or_else(|e| e.into_inner()).clone()
+        self.memory
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
     }
 
     fn mutate(&self, f: impl FnOnce(&mut Memory) -> bool) -> bool {
@@ -270,7 +279,15 @@ impl Eye {
         installed_every: Duration,
         running_every: Duration,
     ) -> EyeHandle {
-        Self::start_with_memory(dirs, sites, probe, installed_every, running_every, Memory::new(), None)
+        Self::start_with_memory(
+            dirs,
+            sites,
+            probe,
+            installed_every,
+            running_every,
+            Memory::new(),
+            None,
+        )
     }
 
     /// `memory` entra no snapshot já no boot; `memory_path = Some` grava a
@@ -285,7 +302,8 @@ impl Eye {
         memory_path: Option<PathBuf>,
     ) -> EyeHandle {
         let inventory = Arc::new(
-            Inventory::new(scan_app_dirs(&dirs), sites.clone()).with_learned(memory.actions().to_vec()),
+            Inventory::new(scan_app_dirs(&dirs), sites.clone())
+                .with_learned(memory.actions().to_vec()),
         );
         let inner = Arc::new(RwLock::new(inventory));
         let memory = Arc::new(Mutex::new(memory));
@@ -320,7 +338,11 @@ impl Eye {
                 next.mark_running(&running);
                 // a memória é a fonte da verdade: um `learn` no meio do tick
                 // não pode ser pisado pela cópia velha
-                next.learned = memory.lock().unwrap_or_else(|e| e.into_inner()).actions().to_vec();
+                next.learned = memory
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .actions()
+                    .to_vec();
                 *inner.write().unwrap_or_else(|e| e.into_inner()) = Arc::new(next);
             }
         });
@@ -338,7 +360,10 @@ mod tests {
             app_name_from_path(Path::new("/Applications/Visual Studio Code.app")).as_deref(),
             Some("Visual Studio Code")
         );
-        assert_eq!(app_name_from_path(Path::new("/Applications/README.txt")), None);
+        assert_eq!(
+            app_name_from_path(Path::new("/Applications/README.txt")),
+            None
+        );
     }
 
     #[test]
@@ -370,8 +395,20 @@ mod tests {
             vec![],
         );
         inv.mark_running(&["Zed".to_string(), "Finder".to_string()]);
-        assert!(inv.installed_apps.iter().find(|a| a.name == "Zed").unwrap().running);
-        assert!(!inv.installed_apps.iter().find(|a| a.name == "Safari").unwrap().running);
+        assert!(
+            inv.installed_apps
+                .iter()
+                .find(|a| a.name == "Zed")
+                .unwrap()
+                .running
+        );
+        assert!(
+            !inv.installed_apps
+                .iter()
+                .find(|a| a.name == "Safari")
+                .unwrap()
+                .running
+        );
         let running: Vec<&str> = inv.running_apps.iter().map(|a| a.name.as_str()).collect();
         assert_eq!(running, vec!["Finder", "Zed"]);
     }
@@ -402,7 +439,10 @@ mod handle_tests {
         tokio::time::sleep(Duration::from_millis(60)).await;
         let a = eye.snapshot();
         assert_eq!(
-            a.running_apps.iter().map(|x| x.name.as_str()).collect::<Vec<_>>(),
+            a.running_apps
+                .iter()
+                .map(|x| x.name.as_str())
+                .collect::<Vec<_>>(),
             vec!["Finder"]
         );
         *probe.0.lock().unwrap() = vec!["Finder".into(), "Safari".into()];
@@ -415,7 +455,11 @@ mod handle_tests {
     }
 
     fn call(url: &str) -> ToolCall {
-        ToolCall { id: "c".into(), name: "web.open".into(), args: serde_json::json!({ "url": url }) }
+        ToolCall {
+            id: "c".into(),
+            name: "web.open".into(),
+            args: serde_json::json!({ "url": url }),
+        }
     }
 
     #[tokio::test]

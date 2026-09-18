@@ -33,7 +33,11 @@ pub struct LearnedAction {
 impl LearnedAction {
     /// Reconstrói a chamada com os args gravados e o id pedido.
     pub fn to_call(&self, id: String) -> ToolCall {
-        ToolCall { id, name: self.tool.clone(), args: self.args.clone() }
+        ToolCall {
+            id,
+            name: self.tool.clone(),
+            args: self.args.clone(),
+        }
     }
 }
 
@@ -51,7 +55,10 @@ pub fn has_sensitive_args(args: &serde_json::Value) -> bool {
 
 /// Segundos desde a época Unix (0 se o relógio estiver antes de 1970).
 pub fn now_secs() -> u64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
 }
 
 #[derive(Debug)]
@@ -241,7 +248,12 @@ impl Memory {
     /// `~/.config/jarvis/reflex_memory.toml`; `None` sem `HOME`.
     pub fn default_path() -> Option<PathBuf> {
         let home = std::env::var_os("HOME")?;
-        Some(PathBuf::from(home).join(".config").join("jarvis").join("reflex_memory.toml"))
+        Some(
+            PathBuf::from(home)
+                .join(".config")
+                .join("jarvis")
+                .join("reflex_memory.toml"),
+        )
     }
 }
 
@@ -251,13 +263,20 @@ mod tests {
     use serde_json::json;
 
     fn call(name: &str, args: serde_json::Value) -> ToolCall {
-        ToolCall { id: "m-1".into(), name: name.into(), args }
+        ToolCall {
+            id: "m-1".into(),
+            name: name.into(),
+            args,
+        }
     }
 
     #[test]
     fn aprende_acao_nova() {
         let mut m = Memory::new();
-        assert!(m.learn("abre a globo", &call("web.open", json!({"url": "https://globo.com"}))));
+        assert!(m.learn(
+            "abre a globo",
+            &call("web.open", json!({"url": "https://globo.com"}))
+        ));
         assert_eq!(m.len(), 1);
         let a = &m.actions()[0];
         assert_eq!(a.phrase, "abre a globo");
@@ -278,7 +297,10 @@ mod tests {
         assert_eq!(m.actions()[0].count, 3);
         assert_eq!(m.actions()[0].phrase, "abre a globo");
         // args diferentes = ação diferente
-        assert!(m.learn("abre o uol", &call("web.open", json!({"url": "https://uol.com.br"}))));
+        assert!(m.learn(
+            "abre o uol",
+            &call("web.open", json!({"url": "https://uol.com.br"}))
+        ));
         assert_eq!(m.len(), 2);
     }
 
@@ -300,7 +322,10 @@ mod tests {
             json!({"headers": {"Authorization": "Bearer x"}}),
             json!({"items": [{"apiKey": "x"}]}),
         ] {
-            assert!(!m.learn("faz algo", &call("http.get", args.clone())), "{args}");
+            assert!(
+                !m.learn("faz algo", &call("http.get", args.clone())),
+                "{args}"
+            );
         }
         assert!(m.is_empty());
     }
@@ -309,9 +334,17 @@ mod tests {
     #[test]
     fn substring_de_chave_sensivel_bloqueia() {
         let mut m = Memory::new();
-        assert!(!m.learn("abre", &call("web.open", json!({"url": "https://x.com", "keyboard": true}))));
+        assert!(!m.learn(
+            "abre",
+            &call(
+                "web.open",
+                json!({"url": "https://x.com", "keyboard": true})
+            )
+        ));
         assert!(has_sensitive_args(&json!({"secretly": 1})));
-        assert!(!has_sensitive_args(&json!({"url": "https://x.com?token=1"})));
+        assert!(!has_sensitive_args(
+            &json!({"url": "https://x.com?token=1"})
+        ));
     }
 
     #[test]
@@ -330,9 +363,18 @@ mod tests {
         let nova = call("web.open", json!({"url": "https://nova.com"}));
         assert!(m.learn("abre nova", &nova));
         assert_eq!(m.len(), MAX_ACTIONS);
-        assert!(m.actions().iter().any(|a| a.args == json!({"url": "https://nova.com"})));
-        assert!(m.actions().iter().any(|a| a.args == json!({"url": "https://s0.com"})));
-        assert!(!m.actions().iter().any(|a| a.args == json!({"url": "https://s1.com"})));
+        assert!(m
+            .actions()
+            .iter()
+            .any(|a| a.args == json!({"url": "https://nova.com"})));
+        assert!(m
+            .actions()
+            .iter()
+            .any(|a| a.args == json!({"url": "https://s0.com"})));
+        assert!(!m
+            .actions()
+            .iter()
+            .any(|a| a.args == json!({"url": "https://s1.com"})));
     }
 
     #[test]
@@ -355,9 +397,18 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         let path = dir.join("sub").join("reflex_memory.toml");
         let mut m = Memory::new();
-        m.learn("abre a globo", &call("web.open", json!({"url": "https://globo.com"})));
-        m.learn("abre a globo", &call("web.open", json!({"url": "https://globo.com"})));
-        m.learn("volume 30", &call("sys.volume", json!({"action": "set", "level": 30})));
+        m.learn(
+            "abre a globo",
+            &call("web.open", json!({"url": "https://globo.com"})),
+        );
+        m.learn(
+            "abre a globo",
+            &call("web.open", json!({"url": "https://globo.com"})),
+        );
+        m.learn(
+            "volume 30",
+            &call("sys.volume", json!({"action": "set", "level": 30})),
+        );
         m.save(&path).unwrap();
         let text = std::fs::read_to_string(&path).unwrap();
         assert!(text.contains("[[actions]]"), "{text}");
@@ -370,13 +421,17 @@ mod tests {
         let back = Memory::load(&path).unwrap();
         assert_eq!(back, m);
         assert_eq!(back.actions()[0].count, 2);
-        assert_eq!(back.actions()[1].args, json!({"action": "set", "level": 30}));
+        assert_eq!(
+            back.actions()[1].args,
+            json!({"action": "set", "level": 30})
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn arquivo_inexistente_e_memoria_vazia() {
-        let path = std::env::temp_dir().join(format!("reflex-memory-nada-{}.toml", std::process::id()));
+        let path =
+            std::env::temp_dir().join(format!("reflex-memory-nada-{}.toml", std::process::id()));
         let _ = std::fs::remove_file(&path);
         assert!(Memory::load(&path).unwrap().is_empty());
     }
@@ -404,7 +459,11 @@ mod tests {
     #[test]
     fn caminho_padrao_fica_em_config_jarvis() {
         let p = Memory::default_path().unwrap();
-        assert!(p.ends_with(".config/jarvis/reflex_memory.toml"), "{}", p.display());
+        assert!(
+            p.ends_with(".config/jarvis/reflex_memory.toml"),
+            "{}",
+            p.display()
+        );
     }
 
     #[test]
