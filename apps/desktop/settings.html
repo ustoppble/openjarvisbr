@@ -207,19 +207,27 @@
         color: #e0e0e0;
         border-bottom-color: #7c3aed;
       }
-      #tab-tools {
+      #tab-tools,
+      #tab-reflex {
         display: none;
         flex-direction: column;
         gap: 18px;
       }
-      body.tab-tools #tab-tools {
+      body.tab-tools #tab-tools,
+      body.tab-reflex #tab-reflex {
         display: flex;
       }
-      body.tab-tools main > :not(h1):not(.tabs):not(#tab-tools):not(.actions) {
+      body.tab-tools main > :not(h1):not(.tabs):not(#tab-tools):not(.actions),
+      body.tab-reflex main > :not(h1):not(.tabs):not(#tab-reflex):not(.actions) {
         display: none;
       }
-      #tab-tools > * {
+      #tab-tools > *,
+      #tab-reflex > * {
         min-width: 0;
+      }
+      .target-list li button {
+        margin-left: 8px;
+        flex-shrink: 0;
       }
       .section-title {
         font-size: 12px;
@@ -359,6 +367,7 @@
       <nav class="tabs" role="tablist">
         <button type="button" role="tab" class="active" data-tab="general">Geral</button>
         <button type="button" role="tab" data-tab="tools">Ferramentas</button>
+        <button type="button" role="tab" data-tab="reflex">Reflexo</button>
       </nav>
       <div class="banner" id="no-key-banner">
         Nenhuma chave configurada. Cole a chave do Gemini abaixo e salve para
@@ -517,6 +526,56 @@
               <button type="button" id="mcp-cancel">Cancelar</button>
             </div>
           </div>
+        </div>
+      </section>
+
+      <section id="tab-reflex" role="tabpanel">
+        <div class="checkbox-row">
+          <input type="checkbox" id="reflex-enabled" />
+          <label for="reflex-enabled">Reflexo ligado (Jev)</label>
+        </div>
+        <div class="field-hint" style="margin-top: -10px">
+          Ações seguras em ~300 ms: abrir app, abrir site da lista, mídia e volume, além de
+          "sim/não" por voz. A transcrição do que você fala e os nomes dos apps são enviados à
+          TypeSafe.ai enquanto o reflexo estiver ligado.
+        </div>
+
+        <div class="field">
+          <label for="reflex-key">Chave da TypeSafe</label>
+          <input type="password" id="reflex-key" autocomplete="off" placeholder="cole a chave (fica mascarada)" />
+          <div class="field-hint" id="reflex-key-status"></div>
+        </div>
+
+        <div class="field">
+          <label for="reflex-threshold">Confiança mínima para agir</label>
+          <div class="range-row">
+            <input type="range" id="reflex-threshold" min="0.5" max="1" step="0.01" />
+            <span class="range-value" id="reflex-threshold-value">0.85</span>
+          </div>
+          <div class="field-hint">Abaixo disso o reflexo não age; o Gemini decide como sempre.</div>
+        </div>
+
+        <div class="field">
+          <p class="section-title">Sites que o reflexo pode abrir</p>
+          <ul class="target-list" id="reflex-sites"></ul>
+          <div class="field-hint" id="reflex-sites-empty">Nenhum site na lista. O reflexo só abre URLs daqui, nunca montadas da fala.</div>
+          <div class="row" style="margin-top: 10px">
+            <div class="field">
+              <label for="reflex-site-name">Nome</label>
+              <input type="text" id="reflex-site-name" autocomplete="off" placeholder="ex.: YouTube" />
+            </div>
+            <div class="field">
+              <label for="reflex-site-url">URL</label>
+              <input type="text" id="reflex-site-url" autocomplete="off" placeholder="https://…" />
+            </div>
+          </div>
+          <div class="button-row" style="margin-top: 10px">
+            <button type="button" id="reflex-site-add">Adicionar</button>
+          </div>
+        </div>
+
+        <div class="button-row">
+          <button type="button" id="reflex-save">Salvar reflexo</button>
         </div>
       </section>
 

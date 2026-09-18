@@ -191,6 +191,7 @@ function setAccessibilityPolling(active: boolean) {
 
 function selectTab(tab: string) {
   document.body.classList.toggle("tab-tools", tab === "tools");
+  document.body.classList.toggle("tab-reflex", tab === "reflex");
   document.querySelectorAll<HTMLButtonElement>(".tabs button").forEach((button) => {
     button.classList.toggle("active", button.dataset.tab === tab);
   });
@@ -588,6 +589,108 @@ fullAccessCheckbox.addEventListener("change", async () => {
 
 void listen<{ on: boolean }>("engine://full_access", (event) => setFullAccessChecked(event.payload.on));
 
+// --- Aba Reflexo (JRV v4) ---------------------------------------------------
+// Contrato dos comandos Tauri (chegam na Task 18): get_reflex_settings,
+// set_reflex_enabled, set_typesafe_api_key, save_reflex_sites.
+
+interface ReflexSite {
+  name: string;
+  url: string;
+}
+
+interface ReflexSettingsPayload {
+  enabled: boolean;
+  has_key: boolean;
+  act_threshold: number;
+  sites: ReflexSite[];
+}
+
+const reflexEnabledCheckbox = $<HTMLInputElement>("reflex-enabled");
+const reflexKeyInput = $<HTMLInputElement>("reflex-key");
+const reflexKeyStatus = $<HTMLDivElement>("reflex-key-status");
+const reflexThresholdInput = $<HTMLInputElement>("reflex-threshold");
+const reflexThresholdValue = $<HTMLSpanElement>("reflex-threshold-value");
+const reflexSitesList = $<HTMLUListElement>("reflex-sites");
+const reflexSitesEmpty = $<HTMLDivElement>("reflex-sites-empty");
+const reflexSiteName = $<HTMLInputElement>("reflex-site-name");
+const reflexSiteUrl = $<HTMLInputElement>("reflex-site-url");
+const reflexSiteAddButton = $<HTMLButtonElement>("reflex-site-add");
+const reflexSaveButton = $<HTMLButtonElement>("reflex-save");
+
+let reflexSites: ReflexSite[] = [];
+
+function renderReflexSites() {
+  reflexSitesList.innerHTML = "";
+  reflexSitesEmpty.hidden = reflexSites.length > 0;
+  reflexSites.forEach((site, index) => {
+    const item = document.createElement("li");
+    const label = document.createElement("span");
+    label.textContent = `${site.name} → ${site.url}`;
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.textContent = "Remover";
+    remove.addEventListener("click", () => {
+      reflexSites.splice(index, 1);
+      renderReflexSites();
+    });
+    item.append(label, remove);
+    reflexSitesList.appendChild(item);
+  });
+}
+
+async function loadReflex() {
+  const reflex = await invoke<ReflexSettingsPayload>("get_reflex_settings");
+  reflexEnabledCheckbox.checked = reflex.enabled;
+  // A chave nunca volta do backend: só o fato de existir.
+  reflexKeyStatus.textContent = reflex.has_key ? "chave salva (***)" : "sem chave";
+  reflexThresholdInput.value = String(reflex.act_threshold);
+  reflexThresholdValue.textContent = reflex.act_threshold.toFixed(2);
+  reflexSites = reflex.sites;
+  renderReflexSites();
+}
+
+reflexThresholdInput.addEventListener("input", () => {
+  reflexThresholdValue.textContent = Number(reflexThresholdInput.value).toFixed(2);
+});
+
+reflexSiteAddButton.addEventListener("click", () => {
+  const name = reflexSiteName.value.trim();
+  const url = reflexSiteUrl.value.trim();
+  if (!name || !/^https?:\/\//.test(url)) {
+    setStatus("informe nome e URL começando com http(s)://", "error");
+    return;
+  }
+  reflexSites.push({ name, url });
+  reflexSiteName.value = "";
+  reflexSiteUrl.value = "";
+  renderReflexSites();
+});
+
+reflexSaveButton.addEventListener("click", async () => {
+  reflexSaveButton.disabled = true;
+  setStatus("salvando reflexo…");
+  try {
+    const key = reflexKeyInput.value;
+    if (key.trim()) {
+      await invoke("set_typesafe_api_key", { key });
+      reflexKeyInput.value = "";
+    }
+    await invoke("save_reflex_sites", {
+      sites: reflexSites,
+      actThreshold: Number(reflexThresholdInput.value),
+    });
+    await invoke("set_reflex_enabled", { on: reflexEnabledCheckbox.checked });
+    await loadReflex();
+    setStatus("reflexo salvo. Reinicie a conversa para aplicar.", "ok");
+  } catch (err) {
+    setStatus(String(err), "error");
+  } finally {
+    reflexSaveButton.disabled = false;
+  }
+});
+
 load().catch((err) => setStatus(String(err), "error"));
 loadTools().catch((err) => setStatus(String(err), "error"));
+// Sem os comandos (Task 18) a aba abre vazia, sem erro na barra de status.
+loadReflex().catch((err) => console.warn("[Settings] reflexo indisponível:", err));
 loadPermissions().catch((err) => setStatus(String(err), "error"));
