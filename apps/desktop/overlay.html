@@ -196,6 +196,40 @@
         }
         .full-access-badge[hidden] { display: none; }
 
+        /* Com o cursor em cima (JRV-80): o card arrasta e o × oculta o
+           overlay. A classe vem do polling do cursor no Rust, já que a janela
+           ignora o mouse fora disso. */
+        .overlay-container.hovering .overlay-card,
+        .overlay-container.hovering .tool-strip {
+            pointer-events: auto;
+            cursor: grab;
+        }
+        .overlay-container.hovering .full-access-badge { right: 40px; }
+
+        .overlay-close {
+            position: absolute;
+            top: 8px;
+            right: 10px;
+            width: 22px;
+            height: 22px;
+            display: none;
+            align-items: center;
+            justify-content: center;
+            padding: 0;
+            border: 1px solid #2a2a2a;
+            border-radius: 50%;
+            background: #161616;
+            color: var(--color-text-dim);
+            font-family: inherit;
+            font-size: 14px;
+            line-height: 1;
+            cursor: pointer;
+            pointer-events: auto;
+        }
+
+        .overlay-container.hovering .overlay-close { display: flex; }
+        .overlay-close:hover { color: var(--color-text); filter: brightness(1.2); }
+
         /* Última fala do usuário e do modelo, uma linha cada, com elipse */
         .lines {
             display: flex;
@@ -299,6 +333,7 @@
     <div id="app" class="overlay-container">
         <div class="overlay-card">
             <span id="full-access-badge" class="full-access-badge" hidden>acesso total</span>
+            <button type="button" id="overlay-close" class="overlay-close" aria-label="Ocultar overlay" title="Ocultar overlay">×</button>
             <div id="surreal-wrap" class="surreal-wrap" hidden></div>
             <div id="orb-wrap" class="orb-wrap">
                 <svg class="orb" viewBox="0 0 100 100" aria-hidden="true">

@@ -31,6 +31,7 @@ interface SettingsPayload {
   default_system_prompt: string;
   user_name: string;
   overlay_style: string;
+  overlay_scale: string;
   profile: string;
   profiles: ProfileOption[];
 }
@@ -64,6 +65,7 @@ const fxAmountInput = $<HTMLInputElement>("fx-amount");
 const fxAmountValue = $<HTMLSpanElement>("fx-amount-value");
 const bargeInCheckbox = $<HTMLInputElement>("barge-in");
 const overlayStyleSelect = $<HTMLSelectElement>("overlay-style");
+const overlayScaleSelect = $<HTMLSelectElement>("overlay-scale");
 const systemPromptTextarea = $<HTMLTextAreaElement>("system-prompt");
 const restorePromptButton = $<HTMLButtonElement>("restore-prompt");
 const toolsEnabledCheckbox = $<HTMLInputElement>("tools-enabled");
@@ -508,6 +510,7 @@ async function load() {
   bargeInCheckbox.checked = settings.barge_in;
   systemPromptTextarea.value = settings.system_prompt;
   overlayStyleSelect.value = settings.overlay_style;
+  overlayScaleSelect.value = settings.overlay_scale;
 
   const pendingError = await invoke<SettingsErrorPayload | null>("take_pending_error");
   if (pendingError) {
@@ -530,6 +533,20 @@ fxAmountInput.addEventListener("input", () => {
   fxAmountValue.textContent = amount.toFixed(2);
   // Aplica ao vivo na sessão em andamento; o valor final é persistido em Salvar.
   void invoke("set_fx_amount", { amount });
+});
+
+// Tamanho do overlay (JRV-80): não espera o Salvar — grava e redimensiona na hora.
+overlayScaleSelect.addEventListener("change", async () => {
+  try {
+    await invoke("set_overlay_scale", { scale: overlayScaleSelect.value });
+    setStatus("tamanho do overlay alterado", "ok");
+  } catch (err) {
+    setStatus(String(err), "error");
+  }
+});
+
+void listen<{ scale: string }>("overlay://scale", (event) => {
+  overlayScaleSelect.value = event.payload.scale;
 });
 
 restorePromptButton.addEventListener("click", () => {

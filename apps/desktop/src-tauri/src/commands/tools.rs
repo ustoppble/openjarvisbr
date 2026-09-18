@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use openjarvisbr_core::mcp::{self, discovery};
 use serde::Serialize;
-use tauri::{AppHandle, Emitter, LogicalSize, Manager};
+use tauri::{AppHandle, Emitter, Manager};
 
 use crate::tools_config;
 
@@ -49,29 +49,12 @@ pub fn confirm_tool(app: AppHandle, id: String, approve: bool) {
     }
 }
 
-/// Tamanho base do overlay (sem a faixa de ferramenta), por estilo.
-fn base_overlay_size() -> (f64, f64) {
-    crate::overlay_size()
-}
-
-/// Altura extra da faixa "Quer que eu execute…?" abaixo da cena.
-const TOOL_STRIP_HEIGHT: f64 = 58.0;
-
 /// Mostra/esconde a faixa de ferramenta: cresce a janela do overlay para
 /// baixo e, com botões na tela, deixa ela receber cliques (fora disso o
 /// overlay ignora o mouse para não atrapalhar o que está atrás).
 #[tauri::command]
 pub fn set_overlay_tool_strip(app: AppHandle, visible: bool, interactive: bool) {
-    let handle = app.clone();
-    let _ = app.run_on_main_thread(move || {
-        let Some(window) = handle.get_webview_window("overlay") else {
-            return;
-        };
-        let (width, height) = base_overlay_size();
-        let height = if visible { height + TOOL_STRIP_HEIGHT } else { height };
-        let _ = window.set_size(LogicalSize::new(width, height));
-        let _ = window.set_ignore_cursor_events(!(visible && interactive));
-    });
+    crate::window_layout::set_tool_strip(&app, visible, interactive);
 }
 
 #[derive(Debug, Serialize)]

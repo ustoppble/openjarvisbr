@@ -16,6 +16,10 @@ interface EnginePayload {
 const MIC_THRESHOLD = 0.08;
 const HIDE_DELAY_MS = 4000;
 const ERROR_HIDE_DELAY_MS = 6000;
+// Quem tirou o cursor de cima depois do tempo de sumir não espera os 4 s.
+const LEAVE_HIDE_DELAY_MS = 1200;
+// Ao desocultar, o overlay aparece um instante para confirmar que voltou.
+const UNHIDE_PEEK_MS = 2500;
 
 function clamp01(value: number): number {
     if (Number.isNaN(value)) return 0;
@@ -41,6 +45,12 @@ class OverlayManager {
     private listeners: UnlistenFn[] = [];
     private scene: SurrealScene | null = null;
     private tools: ToolStrip;
+    // Janela (JRV-80): card à mostra (avisado ao Rust), cursor em cima e
+    // ocultado pelo usuário.
+    private shown = false;
+    private hovering = false;
+    private hideWhenLeaving = false;
+    private hidden = false;
 
     constructor() {
         this.container = document.getElementById("app") || document.body;
@@ -57,6 +67,7 @@ class OverlayManager {
         await this.initializeScene();
         await this.tools.initialize();
         await this.initializeFullAccessBadge();
+        await this.initializeWindowControls();
         this.listeners.push(
             await listen("engine://state", (event: any) => this.handleStateChange(event.payload))
         );
@@ -86,6 +97,66 @@ class OverlayManager {
                 badge.hidden = !event.payload?.on;
             })
         );
+    }
+
+    // Arrastar pelo card, × para ocultar, hover e ocultar vindos do Rust.
+    private async initializeWindowControls() {
+        try {
+            const layout = await invoke<{ hidden: boolean }>("get_overlay_layout");
+            this.hidden = layout.hidden;
+        } catch (err) {
+            console.error("[Overlay] Falha ao ler o estado da janela", err);
+        }
+
+        document.getElementById("overlay-close")?.addEventListener("click", () => {
+            void invoke("hide_overlay").catch((err) => console.error("[Overlay] hide_overlay falhou", err));
+        });
+        // No document: o container tem `pointer-events: none` e só o card em
+        // hover recebe o ponteiro.
+        document.addEventListener("mousedown", (event) => {
+            if (event.button !== 0 || (event.target as HTMLElement).closest("button")) return;
+            void invoke("overlay_start_drag").catch((err) =>
+                console.error("[Overlay] overlay_start_drag falhou", err)
+            );
+        });
+
+        this.listeners.push(
+            await listen<{ inside: boolean }>("overlay://hover", (event) => this.setHovering(event.payload.inside))
+        );
+        this.listeners.push(
+            await listen<{ hidden: boolean }>("overlay://hidden", (event) => this.setHidden(event.payload.hidden))
+        );
+    }
+
+    private setHovering(inside: boolean) {
+        this.hovering = inside;
+        this.container.classList.toggle("hovering", inside);
+        if (!inside && this.hideWhenLeaving) {
+            this.hideWhenLeaving = false;
+            this.hideAfterDelay(LEAVE_HIDE_DELAY_MS);
+        }
+    }
+
+    private setHidden(hidden: boolean) {
+        this.hidden = hidden;
+        if (hidden) {
+            // Pedido de Confirmar/Negar continua na tela: sem ele a ferramenta
+            // seria negada sozinha.
+            if (this.tools.needsAnswer()) return;
+            this.clearHideTimer();
+            this.hideWhenLeaving = false;
+            this.container.classList.remove("visible");
+            this.setShown(false);
+            return;
+        }
+        this.show();
+        this.hideAfterDelay(UNHIDE_PEEK_MS);
+    }
+
+    private setShown(shown: boolean) {
+        if (this.shown === shown) return;
+        this.shown = shown;
+        void invoke("overlay_shown", { shown }).catch((err) => console.error("[Overlay] overlay_shown falhou", err));
     }
 
     private async initializeScene() {
@@ -181,22 +252,33 @@ class OverlayManager {
     }
 
     private show() {
-        if (this.hideTimer !== null) {
-            clearTimeout(this.hideTimer);
-            this.hideTimer = null;
-        }
+        if (this.hidden && !this.tools.needsAnswer()) return;
+        this.clearHideTimer();
+        this.hideWhenLeaving = false;
         this.container.classList.add("visible");
+        this.setShown(true);
     }
 
     private hide() {
         if (this.tools.holdsOverlay()) return;
+        // Não some debaixo do cursor de quem vai arrastar ou fechar.
+        if (this.hovering) {
+            this.hideWhenLeaving = true;
+            return;
+        }
         this.container.classList.remove("visible");
+        this.setShown(false);
+    }
+
+    private clearHideTimer() {
+        if (this.hideTimer !== null) {
+            clearTimeout(this.hideTimer);
+            this.hideTimer = null;
+        }
     }
 
     private hideAfterDelay(delayMs: number) {
-        if (this.hideTimer !== null) {
-            clearTimeout(this.hideTimer);
-        }
+        this.clearHideTimer();
         this.hideTimer = window.setTimeout(() => {
             this.hide();
             this.hideTimer = null;

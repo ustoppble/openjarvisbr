@@ -9,20 +9,22 @@ mod errors;
 mod tool_events;
 mod tools_config;
 mod updater;
+mod window_layout;
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 
 use openjarvisbr_core::config::{
-    all_profiles, effective_fx_amount, effective_overlay_style, effective_system_prompt,
+    all_profiles, effective_fx_amount, effective_system_prompt,
     effective_voice, load_api_key, load_settings, save_profile,
 };
 use openjarvisbr_core::engine::{Engine, EngineConfig, EngineEvent, EngineHandle, EngineState};
 use openjarvisbr_core::profiles::DEFAULT_PROFILE_ID;
 use tauri::menu::{CheckMenuItem, IsMenuItem, Menu, MenuItem, Submenu};
 use tauri::tray::TrayIconBuilder;
-use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
+use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
+use window_layout::WindowLayoutState;
 use tokio::sync::broadcast;
 
 use commands::settings::{get_settings, list_devices, save_settings, set_fx_amount};
@@ -226,98 +228,7 @@ fn do_reconnect(app: &AppHandle) {
     }
 }
 
-pub(crate) fn open_settings_window(app: &AppHandle) {
-    let handle = app.clone();
-    let _ = app.run_on_main_thread(move || {
-        if let Some(window) = handle.get_webview_window("settings") {
-            let _ = window.show();
-            let _ = window.set_focus();
-            return;
-        }
-        let _ = WebviewWindowBuilder::new(&handle, "settings", WebviewUrl::App("settings.html".into()))
-            .title("OpenJarvisBR — Configurações")
-            .inner_size(520.0, 640.0)
-            .resizable(false)
-            .center()
-            .build();
-    });
-}
-
-const OVERLAY_WIDTH_ORB: f64 = 420.0;
-const OVERLAY_HEIGHT_ORB: f64 = 140.0;
-/// A cena 3D surreal precisa de mais espaço que o orb de 7 pontos.
-const OVERLAY_WIDTH_SURREAL: f64 = 520.0;
-const OVERLAY_HEIGHT_SURREAL: f64 = 220.0;
-const OVERLAY_TOP_MARGIN: f64 = 12.0;
-
-/// Dimensões da janela do overlay pro `overlay_style` atual.
-pub(crate) fn overlay_size() -> (f64, f64) {
-    match effective_overlay_style(&load_settings()).as_str() {
-        "orb" => (OVERLAY_WIDTH_ORB, OVERLAY_HEIGHT_ORB),
-        _ => (OVERLAY_WIDTH_SURREAL, OVERLAY_HEIGHT_SURREAL),
-    }
-}
-
-/// Topo central do monitor ativo (o que está sob o cursor, com fallback pro
-/// primário), em pixels lógicos, respeitando a `work_area` do monitor para
-/// não abrir atrás da menu bar/dock.
-fn overlay_position(app: &AppHandle, width: f64) -> (f64, f64) {
-    let monitor = app
-        .cursor_position()
-        .ok()
-        .and_then(|cursor| app.monitor_from_point(cursor.x, cursor.y).ok().flatten())
-        .or_else(|| app.primary_monitor().ok().flatten());
-
-    let Some(monitor) = monitor else {
-        return (100.0, OVERLAY_TOP_MARGIN);
-    };
-
-    let scale = monitor.scale_factor();
-    let area = monitor.work_area();
-    let width_px = width * scale;
-    let margin_px = OVERLAY_TOP_MARGIN * scale;
-
-    let x = area.position.x as f64 + (area.size.width as f64 - width_px) / 2.0;
-    let y = area.position.y as f64 + margin_px;
-
-    (x / scale, y / scale)
-}
-
-pub(crate) fn open_overlay_window(app: &AppHandle) {
-    let handle = app.clone();
-    let _ = app.run_on_main_thread(move || {
-        if handle.get_webview_window("overlay").is_some() {
-            // Overlay já existe, deixa ele gerenciar sua visibilidade via eventos
-            return;
-        }
-        let (width, height) = overlay_size();
-        let (x, y) = overlay_position(&handle, width);
-        // `visible(true)` mantém a janela sempre mapeada: o show/hide real é
-        // puramente CSS (overlay.ts), assim nunca chamamos a API nativa de
-        // show() que tornaria a janela key window. `focusable(false)` é a
-        // garantia definitiva contra roubo de foco (sobrepõe canBecomeKeyWindow
-        // no macOS), independente de qualquer show/hide futuro.
-        let window = WebviewWindowBuilder::new(&handle, "overlay", WebviewUrl::App("overlay.html".into()))
-            .decorations(false)
-            .transparent(true)
-            .always_on_top(true)
-            .skip_taskbar(true)
-            .resizable(false)
-            .focused(false)
-            .focusable(false)
-            // Os botões Confirmar/Negar (JRV-58) precisam do primeiro clique
-            // numa janela que nunca vira key window.
-            .accept_first_mouse(true)
-            .visible(true)
-            .inner_size(width, height)
-            .position(x, y)
-            .build();
-
-        if let Ok(window) = window {
-            let _ = window.set_ignore_cursor_events(true);
-        }
-    });
-}
+pub(crate) use window_layout::{open_overlay_window, open_settings_window};
 
 /// Marca no submenu "Perfil" o item cujo id é `active_id`, desmarcando os
 /// demais — chamado depois de qualquer troca de perfil, seja pelo próprio
@@ -353,6 +264,9 @@ fn switch_profile(app: &AppHandle, id: &str) {
 fn handle_menu_event(app: &AppHandle, id: &str) {
     if let Some(profile_id) = id.strip_prefix("profile:") {
         switch_profile(app, profile_id);
+        return;
+    }
+    if window_layout::handle_menu_event(app, id) {
         return;
     }
     match id {
@@ -667,8 +581,13 @@ fn main() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
-                .with_handler(|app, _shortcut, event| {
-                    if event.state() == ShortcutState::Pressed {
+                .with_handler(|app, shortcut, event| {
+                    if event.state() != ShortcutState::Pressed {
+                        return;
+                    }
+                    if window_layout::is_overlay_shortcut(shortcut) {
+                        window_layout::toggle_overlay_hidden(app);
+                    } else {
                         toggle_mute(app);
                     }
                 })
@@ -683,6 +602,8 @@ fn main() {
             muted: AtomicBool::new(false),
             pending_error: Mutex::new(None),
         })
+        .manage(WindowLayoutState::default())
+        .on_window_event(window_layout::on_window_event)
         .invoke_handler(tauri::generate_handler![
             set_mute,
             reconnect,
@@ -717,7 +638,12 @@ fn main() {
             save_reflex_sites,
             get_reflex_memory,
             forget_learned,
-            forget_all_learned
+            forget_all_learned,
+            window_layout::overlay_shown,
+            window_layout::overlay_start_drag,
+            window_layout::get_overlay_layout,
+            window_layout::hide_overlay,
+            window_layout::set_overlay_scale
         ])
         .setup(|app| {
             let handle = app.handle().clone();
@@ -764,6 +690,7 @@ fn main() {
                 settings_at_startup.full_access,
                 None::<&str>,
             )?;
+            let (overlay_hide_item, overlay_submenu) = window_layout::build_tray_items(app)?;
             let settings_item = MenuItem::with_id(app, "settings", "Configurações", true, None::<&str>)?;
             let quit_item = MenuItem::with_id(app, "quit", "Sair", true, None::<&str>)?;
             let menu = Menu::with_items(
@@ -774,6 +701,8 @@ fn main() {
                     &tools_item,
                     &full_access_item,
                     &profile_submenu,
+                    &overlay_hide_item,
+                    &overlay_submenu,
                     &settings_item,
                     &quit_item,
                 ],
@@ -795,6 +724,11 @@ fn main() {
                 .build(app)?;
 
             app.global_shortcut().register(MUTE_SHORTCUT)?;
+            // Atalho ocupado por outro app não impede o Jarvis de abrir: o
+            // overlay continua ocultável pela bandeja e pelo ×.
+            if let Err(err) = app.global_shortcut().register(window_layout::OVERLAY_SHORTCUT) {
+                tracing::warn!(erro = %err, "não foi possível registrar o atalho do overlay");
+            }
 
             // Dev: OPENJARVISBR_TOOL_MOCK=1 dispara o fluxo falso de ferramenta
             // (requested → confirm_needed) alguns segundos após abrir, para

@@ -75,6 +75,11 @@ export class ToolStrip {
         return this.mode !== "idle";
     }
 
+    /** Pedido esperando Confirmar/Negar: aparece mesmo com o overlay oculto. */
+    needsAnswer(): boolean {
+        return this.mode === "confirm";
+    }
+
     handle(payload: ToolEventPayload) {
         if (!payload || !payload.id) return;
         console.log(`[Overlay] Ferramenta ${payload.kind}: ${payload.name}`);

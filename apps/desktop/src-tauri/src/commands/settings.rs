@@ -4,8 +4,8 @@
 
 use openjarvisbr_core::audio::{capture::list_input_devices, playback::list_output_devices};
 use openjarvisbr_core::config::{
-    all_profiles, default_system_prompt, effective_overlay_style, load_api_key, load_settings,
-    save, SaveSettings,
+    all_profiles, default_system_prompt, effective_overlay_scale, effective_overlay_style,
+    load_api_key, load_settings, save, SaveSettings,
 };
 use openjarvisbr_core::profiles::DEFAULT_PROFILE_ID;
 use serde::{Deserialize, Serialize};
@@ -35,6 +35,8 @@ pub struct SettingsPayload {
     pub default_system_prompt: String,
     pub user_name: String,
     pub overlay_style: String,
+    /// `[overlay].scale` (JRV-80): aplicado na hora pelo select, fora do Salvar.
+    pub overlay_scale: &'static str,
     pub profile: String,
     pub profiles: Vec<ProfileOption>,
 }
@@ -47,6 +49,7 @@ pub fn get_settings() -> SettingsPayload {
     let key = load_api_key().ok();
     let settings = load_settings();
     let overlay_style = effective_overlay_style(&settings);
+    let overlay_scale = effective_overlay_scale(&settings);
     let profile = settings
         .profile
         .clone()
@@ -74,6 +77,7 @@ pub fn get_settings() -> SettingsPayload {
         default_system_prompt: default_system_prompt(settings.user_name.as_deref()),
         user_name: settings.user_name.clone().unwrap_or_default(),
         overlay_style,
+        overlay_scale,
         profile,
         profiles,
     }
