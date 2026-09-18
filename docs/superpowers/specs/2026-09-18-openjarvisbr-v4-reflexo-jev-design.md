@@ -246,3 +246,61 @@ probabilidades e latência.
 
 Clique em elementos (olho de acessibilidade), digitar texto, cálculos, qualquer
 ação de risco `Confirm`, roteamento de custo Gemini vs local, janelas e abas.
+
+## Adendo 2026-09-18 — Memória de ações (fase 1.5, pedido do dono: "aprender tudo")
+
+Substitui a lista manual de sites por aprendizado geral. O reflexo passa a
+lembrar **toda ação que o Gemini executou com sucesso** e a oferecê-la ao Jev
+como opção na próxima fala parecida.
+
+**Captura.** Em `on_tool_finished`, quando a chamada veio do modelo (id sem
+prefixo `reflex-`) e terminou sem erro, o engine grava
+`LearnedAction { phrase, tool, args, count, last_used }` onde `phrase` é
+`user_heard` no momento em que a chamada chegou (guardar em `PendingLearn` por
+id ao receber o `ToolCall`). Mesma (tool, args) já existente: incrementa `count`
+e atualiza `phrase` se a nova for mais curta. Teto 200 ações; ao passar,
+descarta a de menor `count` mais antiga.
+
+**Persistência.** Arquivo próprio `~/.config/jarvis/reflex_memory.toml`
+(`[[actions]]`), nunca o config.toml. Args são gravados como JSON string. Ações
+com args que contenham chaves sensíveis (`token`, `key`, `password`, `secret`,
+`authorization`) **não são aprendidas**. Tools `fs.write` e `shell.run` são
+aprendidas, mas ver regra de risco abaixo.
+
+**Olho.** `Inventory.learned: Vec<LearnedAction>`; `EyeHandle::learn(action)`
+atualiza o snapshot na hora e `Eye::start` carrega o arquivo no boot.
+
+**Juiz.** Nova pergunta `learned` (choice) só quando há candidatas: opções são
+as ações aprendidas cujo `phrase` normalizado compartilha ≥1 token (≥3 letras)
+com a fala, top 20 por `count`, mais `none`. Texto da opção:
+`"{tool}: {call_summary}"` com a frase original entre aspas. Chave da opção:
+índice estável (`l0`, `l1`, …) mapeado de volta pelo juiz. `intent` ganha a
+opção `learned` ("repetir uma ação que o assistente já fez antes para o
+usuário"). Decisão: `intent = learned` confiante **e** `learned ≠ none`
+confiante → `Decision::Act(call)` com os args gravados e id `reflex-N`.
+
+**Risco (regra que não muda).** No engine, `on_reflex` deixa de exigir
+`is_reflex_tool`. Passa a valer: tool existe no registry **e** política diz
+`Safe` para ela (`policy.risk == Safe` ou `decisions.allows(name)`). Se for
+`Confirm`, o engine **não executa**: emite `ToolConfirmNeeded` na hora com a
+chamada aprendida (mesmo caminho de hoje, só que sem esperar o Gemini) e o
+resto segue igual: "sim" por voz ou botão, "sempre pode" libera. Tools
+`mcp.*` de escrita seguem `Confirm`.
+
+**Dedup.** Igual a hoje: ação feita pelo reflexo entra em `recently_done`; o
+Gemini que chamar a mesma recebe sucesso sem repetir.
+
+**Sites.** `[[reflex.sites]]` continua aceito, mas a aba deixa de ser
+formulário: vira lista somente leitura "O que o reflexo já aprendeu" com
+botão "esquecer" por linha e "esquecer tudo". A pergunta `site` do juiz
+continua existindo para quem tiver lista manual.
+
+**Testes.** memória: aprende, incrementa, teto, ignora args sensíveis, carrega
+e grava. juiz: candidatas por token, `intent = learned` com alvo → `Act` com os
+args gravados; `none` → `Nothing`. engine: Gemini executa `web.open` de
+"abre a globo" → fica aprendido; próxima fala "abre a globo" com juiz fake
+escolhendo `l0` → executa sem o Gemini e deduplica; ação `Confirm` aprendida →
+`ToolConfirmNeeded` imediato, sem executar.
+
+**Fora.** Aprender a partir de ações negadas ou com erro; sincronizar memória
+entre máquinas; UI de edição de args.
