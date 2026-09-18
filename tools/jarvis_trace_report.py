@@ -67,6 +67,7 @@ class Turn:
     reflex: list[tuple[str, str, int]] = field(default_factory=list)  # (ts, decisão, ms)
     learned: list[str] = field(default_factory=list)
     dedup: list[str] = field(default_factory=list)
+    pulos: list[str] = field(default_factory=list)  # reflexo mudo por falha de infra
     notes: list[str] = field(default_factory=list)
     ended: str = ""
 
@@ -145,6 +146,14 @@ def parse(lines: list[str], since: str | None) -> list[Turn]:
                 name = nm.group(1)
             lat = re.search(r"latency_ms=(\d+)", msg)
             turn_for(ts).reflex.append((ts, f"{dec}{(' ' + name) if name else ''}", int(lat.group(1)) if lat else -1))
+        elif msg.startswith("reflexo pulou esta rodada"):
+            # O reflexo ficou mudo por falha de infra (Jev fora do ar ou lento).
+            # Sem isso no resumo, a rodada parece só "o modelo agiu mais" e o
+            # produto degrada em silêncio.
+            # O motivo é frase com espaços ("TypeSafe não respondeu a tempo"),
+            # então não dá para usar parse_kv, que corta no primeiro espaço.
+            motivo = msg.split("err=", 1)[-1].strip() if "err=" in msg else "motivo não dito"
+            turn_for(ts).pulos.append(motivo)
         elif msg.startswith("reflexo aprendeu a ação"):
             kv = parse_kv(msg)
             turn_for(ts).learned.append(f"{kv.get('ferramenta')} ← \"{kv.get('frase', '')}\"")
@@ -234,6 +243,12 @@ def report(turns: list[Turn]) -> str:
             if chamadas and not agiu:
                 gasto += sum(chamadas)
                 desperdicio.append((' '.join(tr.user).strip() or '(sem fala)', len(chamadas), sum(chamadas)))
+        mudo = [(tr, err) for tr in turns for err in tr.pulos]
+        if mudo:
+            lines.append(f"- REFLEXO MUDO: {len(mudo)} vez(es) — o Jev não respondeu e o reflexo nem decidiu")
+            for tr, err in mudo:
+                fala = ' '.join(tr.user).strip() or '(sem fala)'
+                lines.append(f"  - \"{fala[:60]}\" — {err}")
         lines.append(f"- Jev gasto sem ação: {len(desperdicio)} de {len([t for t in turns if t.reflex])} turnos"
                      f" ({gasto} ms jogados fora)")
         for fala, n, ms in desperdicio:
