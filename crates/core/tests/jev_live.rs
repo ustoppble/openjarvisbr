@@ -1,13 +1,18 @@
-//! Uma chamada real ao Jev. Roda só com TYPESAFE_API_KEY:
-//! `TYPESAFE_API_KEY=... cargo test -p openjarvisbr-core --test jev_live -- --ignored --nocapture`
+//! Uma chamada real ao Jev, pela TypeSafe ou pelo OpenRouter (o que tiver chave):
+//! `OPENROUTER_API_KEY=... cargo test -p openjarvisbr-core --test jev_live -- --ignored --nocapture`
+//! ou `TYPESAFE_API_KEY=...` (vence quando as duas existem).
 use openjarvisbr_core::reflex::judge::{JevClient, Judge};
 use openjarvisbr_core::reflex::questions::{Question, Questions};
 
 #[tokio::test]
 #[ignore]
 async fn jev_responde_em_menos_de_um_segundo() {
-    let key = std::env::var("TYPESAFE_API_KEY").expect("TYPESAFE_API_KEY");
-    let client = JevClient::new(key, "jev-latest".into()).unwrap();
+    let settings = openjarvisbr_core::config::load_reflex();
+    let key = settings.api_key.clone().expect("TYPESAFE_API_KEY ou OPENROUTER_API_KEY");
+    eprintln!("provedor {} · modelo {}", settings.provider.label(), settings.model);
+    let client = JevClient::new(key, settings.model.clone())
+        .unwrap()
+        .with_base_url(&settings.endpoint);
     let mut q = Questions::default();
     q.insert(
         "intent",

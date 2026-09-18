@@ -100,7 +100,9 @@ impl Reflex {
             return None;
         }
         let key = settings.api_key.clone()?;
-        let client = judge::JevClient::new(key, settings.model.clone()).ok()?;
+        let client = judge::JevClient::new(key, settings.model.clone())
+            .ok()?
+            .with_base_url(&settings.endpoint);
         let eye = eye::Eye::start(settings.sites.clone());
         Some(Self::new(settings, Arc::new(client), eye))
     }

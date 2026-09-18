@@ -81,11 +81,18 @@ como na v3.
 
 **Como ligar.** Pela janela de Configurações › aba **Reflexo** (cole a chave, marque
 **Reflexo ligado (Jev)**, cadastre os sites, **Salvar reflexo** e reconecte), ou por
-arquivo. A chave vem do `config.toml` (`typesafe_api_key`) ou da variável de ambiente
-`TYPESAFE_API_KEY` (a env vence). Nunca em log, evento, overlay ou commit.
+arquivo. Dois provedores servem o mesmo Jev, com o mesmo protocolo:
+
+- **OpenRouter** (sem lista de espera): chave em `openrouter_api_key` ou env
+  `OPENROUTER_API_KEY`; endpoint `/api/alpha/decisions`, modelo `typesafe/jev-1.13`.
+- **TypeSafe direto** (acesso antecipado): chave em `typesafe_api_key` ou env
+  `TYPESAFE_API_KEY`; modelo `jev-latest`. Quando as duas existem, a TypeSafe vence.
+
+A env vence o arquivo. Nenhuma chave vai para log, evento, overlay ou commit.
 
 ```toml
-typesafe_api_key = "..."        # ou export TYPESAFE_API_KEY="..."
+openrouter_api_key = "..."      # ou export OPENROUTER_API_KEY="..."
+# typesafe_api_key = "..."      # ou export TYPESAFE_API_KEY="..." (vence o OpenRouter)
 
 [reflex]
 enabled = true

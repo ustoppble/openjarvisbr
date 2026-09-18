@@ -245,11 +245,15 @@ async fn reflex_diagnostic(phrase: Option<String>, only_eye: bool, pending: bool
     let ids: Vec<&str> = questions.0.keys().map(|k| k.as_str()).collect();
     println!("perguntas ({}): {}", questions.len(), ids.join(", "));
     if !settings.enabled {
-        eprintln!("reflexo desligado: configure typesafe_api_key no config.toml ou TYPESAFE_API_KEY");
+        eprintln!(
+            "reflexo desligado: configure typesafe_api_key ou openrouter_api_key no config.toml \
+             (ou as envs TYPESAFE_API_KEY / OPENROUTER_API_KEY)"
+        );
         return 2;
     }
+    println!("provedor: {} · modelo: {}", settings.provider.label(), settings.model);
     let client = match JevClient::new(settings.api_key.clone().unwrap_or_default(), settings.model.clone()) {
-        Ok(client) => client,
+        Ok(client) => client.with_base_url(&settings.endpoint),
         Err(err) => {
             eprintln!("{err}");
             return 2;

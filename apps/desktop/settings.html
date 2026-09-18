@@ -541,9 +541,15 @@
         </div>
 
         <div class="field">
-          <label for="reflex-key">Chave da TypeSafe</label>
+          <label for="reflex-key">Chave da TypeSafe (acesso direto)</label>
           <input type="password" id="reflex-key" autocomplete="off" placeholder="cole a chave (fica mascarada)" />
           <div class="field-hint" id="reflex-key-status"></div>
+        </div>
+
+        <div class="field">
+          <label for="reflex-openrouter-key">Chave do OpenRouter (serve o Jev sem lista de espera)</label>
+          <input type="password" id="reflex-openrouter-key" autocomplete="off" placeholder="cole a chave (fica mascarada)" />
+          <div class="field-hint">Usada só quando não há chave da TypeSafe. Modelo <code>typesafe/jev-1.13</code>.</div>
         </div>
 
         <div class="field">

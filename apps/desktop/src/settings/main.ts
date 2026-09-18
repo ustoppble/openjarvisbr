@@ -601,12 +601,14 @@ interface ReflexSite {
 interface ReflexSettingsPayload {
   enabled: boolean;
   has_key: boolean;
+  provider: string;
   act_threshold: number;
   sites: ReflexSite[];
 }
 
 const reflexEnabledCheckbox = $<HTMLInputElement>("reflex-enabled");
 const reflexKeyInput = $<HTMLInputElement>("reflex-key");
+const reflexOpenRouterKeyInput = $<HTMLInputElement>("reflex-openrouter-key");
 const reflexKeyStatus = $<HTMLDivElement>("reflex-key-status");
 const reflexThresholdInput = $<HTMLInputElement>("reflex-threshold");
 const reflexThresholdValue = $<HTMLSpanElement>("reflex-threshold-value");
@@ -642,7 +644,7 @@ async function loadReflex() {
   const reflex = await invoke<ReflexSettingsPayload>("get_reflex_settings");
   reflexEnabledCheckbox.checked = reflex.enabled;
   // A chave nunca volta do backend: só o fato de existir.
-  reflexKeyStatus.textContent = reflex.has_key ? "chave salva (***)" : "sem chave";
+  reflexKeyStatus.textContent = reflex.has_key ? `chave salva (***) · provedor: ${reflex.provider}` : "sem chave";
   reflexThresholdInput.value = String(reflex.act_threshold);
   reflexThresholdValue.textContent = reflex.act_threshold.toFixed(2);
   reflexSites = reflex.sites;
@@ -674,6 +676,11 @@ reflexSaveButton.addEventListener("click", async () => {
     if (key.trim()) {
       await invoke("set_typesafe_api_key", { key });
       reflexKeyInput.value = "";
+    }
+    const openRouterKey = reflexOpenRouterKeyInput.value;
+    if (openRouterKey.trim()) {
+      await invoke("set_openrouter_api_key", { key: openRouterKey });
+      reflexOpenRouterKeyInput.value = "";
     }
     await invoke("save_reflex_sites", {
       sites: reflexSites,

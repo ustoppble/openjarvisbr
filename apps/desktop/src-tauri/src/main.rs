@@ -549,6 +549,7 @@ fn reconnect(app: AppHandle) {
 struct ReflexSettingsPayload {
     enabled: bool,
     has_key: bool,
+    provider: &'static str,
     act_threshold: f32,
     sites: Vec<openjarvisbr_core::config::SiteConfig>,
 }
@@ -559,6 +560,7 @@ fn get_reflex_settings() -> ReflexSettingsPayload {
     ReflexSettingsPayload {
         enabled: r.enabled,
         has_key: r.api_key.is_some(),
+        provider: r.provider.label(),
         act_threshold: r.act_threshold,
         sites: r.sites,
     }
@@ -572,6 +574,11 @@ fn set_reflex_enabled(on: bool) -> Result<(), String> {
 #[tauri::command]
 fn set_typesafe_api_key(key: String) -> Result<(), String> {
     openjarvisbr_core::config::save_typesafe_api_key(&key).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn set_openrouter_api_key(key: String) -> Result<(), String> {
+    openjarvisbr_core::config::save_openrouter_api_key(&key).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -647,6 +654,7 @@ fn main() {
             get_reflex_settings,
             set_reflex_enabled,
             set_typesafe_api_key,
+            set_openrouter_api_key,
             save_reflex_sites
         ])
         .setup(|app| {

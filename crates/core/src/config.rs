@@ -61,8 +61,41 @@ struct FileConfig {
     tools: Option<ToolsSection>,
     /// Chave da TypeSafe (Jev). Também aceita a env `TYPESAFE_API_KEY`.
     typesafe_api_key: Option<String>,
+    /// Chave do OpenRouter, que serve o Jev em `/api/alpha/decisions`. Usada
+    /// só quando não há chave da TypeSafe. Também aceita a env
+    /// `OPENROUTER_API_KEY`.
+    openrouter_api_key: Option<String>,
     /// Seção `[reflex]`.
     reflex: Option<ReflexSection>,
+}
+
+/// Quem serve o Jev: a TypeSafe direto ou o OpenRouter (mesmo protocolo,
+/// endpoint e namespace de modelo diferentes).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReflexProvider {
+    TypeSafe,
+    OpenRouter,
+}
+
+impl ReflexProvider {
+    pub fn endpoint(self) -> &'static str {
+        match self {
+            Self::TypeSafe => "https://api.typesafe.ai/v1/systemone",
+            Self::OpenRouter => "https://openrouter.ai/api/alpha/decisions",
+        }
+    }
+    pub fn default_model(self) -> &'static str {
+        match self {
+            Self::TypeSafe => "jev-latest",
+            Self::OpenRouter => "typesafe/jev-1.13",
+        }
+    }
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::TypeSafe => "TypeSafe",
+            Self::OpenRouter => "OpenRouter",
+        }
+    }
 }
 
 /// `[tools]` no config.toml.
@@ -104,6 +137,10 @@ pub struct SiteConfig {
 pub struct ReflexSettings {
     pub enabled: bool,
     pub api_key: Option<String>,
+    /// Quem atende com essa chave.
+    pub provider: ReflexProvider,
+    /// URL do endpoint de decisões do provedor.
+    pub endpoint: String,
     pub model: String,
     pub act_threshold: f32,
     pub confirm_threshold: f32,
@@ -116,6 +153,8 @@ impl fmt::Debug for ReflexSettings {
         f.debug_struct("ReflexSettings")
             .field("enabled", &self.enabled)
             .field("api_key", &self.api_key.as_ref().map(|_| "***"))
+            .field("provider", &self.provider)
+            .field("endpoint", &self.endpoint)
             .field("model", &self.model)
             .field("act_threshold", &self.act_threshold)
             .field("confirm_threshold", &self.confirm_threshold)
@@ -130,7 +169,9 @@ impl Default for ReflexSettings {
         Self {
             enabled: false,
             api_key: None,
-            model: "jev-latest".into(),
+            provider: ReflexProvider::TypeSafe,
+            endpoint: ReflexProvider::TypeSafe.endpoint().into(),
+            model: ReflexProvider::TypeSafe.default_model().into(),
             act_threshold: 0.85,
             confirm_threshold: 0.85,
             debounce_ms: 120,
@@ -141,22 +182,52 @@ impl Default for ReflexSettings {
 
 /// Env que fornece a chave da TypeSafe (vence a do arquivo).
 pub const ENV_TYPESAFE_KEY: &str = "TYPESAFE_API_KEY";
+/// Env que fornece a chave do OpenRouter (vence a do arquivo).
+pub const ENV_OPENROUTER_KEY: &str = "OPENROUTER_API_KEY";
 
-/// Resolve `[reflex]` + chave. `env_key` é o valor da env já lido (injetável
-/// nos testes). Sem chave = desligado; `enabled = false` vence a chave.
-fn reflex_from(parsed: &FileConfig, env_key: Option<String>) -> ReflexSettings {
+/// Chaves já lidas do ambiente, injetáveis nos testes.
+#[derive(Debug, Default, Clone)]
+pub struct ReflexEnv {
+    pub typesafe: Option<String>,
+    pub openrouter: Option<String>,
+}
+
+impl ReflexEnv {
+    fn from_process() -> Self {
+        Self {
+            typesafe: std::env::var(ENV_TYPESAFE_KEY).ok(),
+            openrouter: std::env::var(ENV_OPENROUTER_KEY).ok(),
+        }
+    }
+}
+
+fn non_empty(value: Option<String>) -> Option<String> {
+    value.filter(|k| !k.trim().is_empty())
+}
+
+/// Resolve `[reflex]` + chave + provedor. A TypeSafe vence quando tem chave
+/// (env ou arquivo); senão o OpenRouter. Sem chave = desligado;
+/// `enabled = false` vence a chave. O modelo padrão segue o provedor, porque
+/// os dois usam namespaces diferentes (`jev-latest` vs `typesafe/jev-1.13`).
+fn reflex_from(parsed: &FileConfig, env: ReflexEnv) -> ReflexSettings {
     let d = ReflexSettings::default();
-    let api_key = env_key
-        .filter(|k| !k.is_empty())
-        .or_else(|| parsed.typesafe_api_key.clone().filter(|k| !k.is_empty()));
+    let typesafe = non_empty(env.typesafe).or_else(|| non_empty(parsed.typesafe_api_key.clone()));
+    let openrouter = non_empty(env.openrouter).or_else(|| non_empty(parsed.openrouter_api_key.clone()));
+    let (provider, api_key) = match (typesafe, openrouter) {
+        (Some(k), _) => (ReflexProvider::TypeSafe, Some(k)),
+        (None, Some(k)) => (ReflexProvider::OpenRouter, Some(k)),
+        (None, None) => (ReflexProvider::TypeSafe, None),
+    };
     let s = parsed.reflex.clone().unwrap_or_default();
     ReflexSettings {
         enabled: api_key.is_some() && s.enabled.unwrap_or(true),
         api_key,
+        provider,
+        endpoint: provider.endpoint().to_string(),
         model: s
             .model
             .filter(|m| !m.trim().is_empty())
-            .unwrap_or(d.model),
+            .unwrap_or_else(|| provider.default_model().to_string()),
         act_threshold: s
             .act_threshold
             .unwrap_or(d.act_threshold)
@@ -172,11 +243,11 @@ fn reflex_from(parsed: &FileConfig, env_key: Option<String>) -> ReflexSettings {
 
 /// Lê a configuração do reflexo do config.toml e da env.
 pub fn load_reflex() -> ReflexSettings {
-    let env_key = std::env::var(ENV_TYPESAFE_KEY).ok();
+    let env = ReflexEnv::from_process();
     let Some(path) = config_path() else {
-        return reflex_from(&FileConfig::default(), env_key);
+        return reflex_from(&FileConfig::default(), env);
     };
-    reflex_from(&read_file_config(&path), env_key)
+    reflex_from(&read_file_config(&path), env)
 }
 
 /// Globs de ferramentas para o motor: nenhum com `[tools].enabled = false`,
@@ -353,6 +424,8 @@ struct FileConfigOut {
     #[serde(skip_serializing_if = "Option::is_none")]
     typesafe_api_key: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    openrouter_api_key: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     reflex: Option<ReflexSection>,
 }
 
@@ -435,7 +508,7 @@ pub fn load_settings() -> Settings {
     let Ok(parsed) = toml::from_str::<FileConfig>(&contents) else {
         return Settings::default();
     };
-    let reflex = reflex_from(&parsed, std::env::var(ENV_TYPESAFE_KEY).ok());
+    let reflex = reflex_from(&parsed, ReflexEnv::from_process());
     Settings {
         system_prompt: parsed.system_prompt.filter(|s| !s.trim().is_empty()),
         voice: parsed.voice.filter(|s| !s.trim().is_empty()),
@@ -525,6 +598,7 @@ pub fn save(update: SaveSettings) -> Result<(), ConfigError> {
         profiles: existing.profiles,
         tools: existing.tools,
         typesafe_api_key: existing.typesafe_api_key,
+        openrouter_api_key: existing.openrouter_api_key,
         reflex: existing.reflex,
     };
 
@@ -554,6 +628,7 @@ pub fn save_profile(id: &str) -> Result<(), ConfigError> {
         profiles: existing.profiles.clone(),
         tools: existing.tools.clone(),
         typesafe_api_key: existing.typesafe_api_key.clone(),
+        openrouter_api_key: existing.openrouter_api_key.clone(),
         reflex: existing.reflex.clone(),
     };
     write_file_config(&path, &out)
@@ -587,15 +662,21 @@ pub fn save_reflex_enabled(on: bool) -> Result<(), ConfigError> {
 /// Grava `typesafe_api_key` na raiz do config.toml. Vazio remove a chave.
 /// A chave nunca passa pelo log.
 pub fn save_typesafe_api_key(key: &str) -> Result<(), ConfigError> {
+    save_root_key("typesafe_api_key", key)
+}
+
+/// Grava `openrouter_api_key` na raiz do config.toml. Vazio remove a chave.
+pub fn save_openrouter_api_key(key: &str) -> Result<(), ConfigError> {
+    save_root_key("openrouter_api_key", key)
+}
+
+fn save_root_key(name: &'static str, key: &str) -> Result<(), ConfigError> {
     let key = key.trim();
     edit_table(|table| {
         if key.is_empty() {
-            table.remove("typesafe_api_key");
+            table.remove(name);
         } else {
-            table.insert(
-                "typesafe_api_key".to_string(),
-                toml::Value::String(key.to_string()),
-            );
+            table.insert(name.to_string(), toml::Value::String(key.to_string()));
         }
     })
 }
@@ -1040,7 +1121,7 @@ name = "YouTube"
 url = "https://youtube.com"
 "#;
         let parsed: FileConfig = toml::from_str(raw).unwrap();
-        let r = reflex_from(&parsed, None);
+        let r = reflex_from(&parsed, ReflexEnv::default());
         assert!(r.enabled);
         assert_eq!(r.api_key.as_deref(), Some("ts-xyz"));
         assert_eq!(r.model, "jev-latest");
@@ -1052,13 +1133,40 @@ url = "https://youtube.com"
     }
 
     #[test]
+    fn reflex_openrouter_quando_so_ha_chave_dele() {
+        let parsed: FileConfig = toml::from_str("openrouter_api_key = \"or-xyz\"").unwrap();
+        let r = reflex_from(&parsed, ReflexEnv::default());
+        assert!(r.enabled);
+        assert_eq!(r.provider, ReflexProvider::OpenRouter);
+        assert_eq!(r.endpoint, "https://openrouter.ai/api/alpha/decisions");
+        assert_eq!(r.model, "typesafe/jev-1.13");
+        assert_eq!(r.api_key.as_deref(), Some("or-xyz"));
+        // env do OpenRouter vence o arquivo
+        let r = reflex_from(&parsed, ReflexEnv { openrouter: Some("or-env".into()), ..Default::default() });
+        assert_eq!(r.api_key.as_deref(), Some("or-env"));
+    }
+
+    #[test]
+    fn reflex_typesafe_vence_openrouter_e_modelo_explicito_vence_padrao() {
+        let parsed: FileConfig =
+            toml::from_str("typesafe_api_key = \"ts\"\nopenrouter_api_key = \"or\"").unwrap();
+        let r = reflex_from(&parsed, ReflexEnv::default());
+        assert_eq!(r.provider, ReflexProvider::TypeSafe);
+        assert_eq!(r.model, "jev-latest");
+        let parsed: FileConfig =
+            toml::from_str("openrouter_api_key = \"or\"\n[reflex]\nmodel = \"typesafe/jev-1.13-20260917\"").unwrap();
+        let r = reflex_from(&parsed, ReflexEnv::default());
+        assert_eq!(r.model, "typesafe/jev-1.13-20260917");
+    }
+
+    #[test]
     fn reflex_sem_chave_fica_desligado_e_env_vence_arquivo() {
         let parsed: FileConfig = toml::from_str("").unwrap();
-        let r = reflex_from(&parsed, None);
+        let r = reflex_from(&parsed, ReflexEnv::default());
         assert!(!r.enabled);
         assert!(r.api_key.is_none());
         let parsed: FileConfig = toml::from_str("typesafe_api_key = \"arquivo\"").unwrap();
-        let r = reflex_from(&parsed, Some("env".to_string()));
+        let r = reflex_from(&parsed, ReflexEnv { typesafe: Some("env".to_string()), ..Default::default() });
         assert_eq!(r.api_key.as_deref(), Some("env"));
         assert!(r.enabled);
     }
@@ -1067,13 +1175,13 @@ url = "https://youtube.com"
     fn reflex_enabled_false_vence_chave() {
         let parsed: FileConfig =
             toml::from_str("typesafe_api_key = \"x\"\n[reflex]\nenabled = false").unwrap();
-        assert!(!reflex_from(&parsed, None).enabled);
+        assert!(!reflex_from(&parsed, ReflexEnv::default()).enabled);
     }
 
     #[test]
     fn reflex_debug_nao_vaza_chave() {
         let parsed: FileConfig = toml::from_str("typesafe_api_key = \"segredo-456\"").unwrap();
-        let s = format!("{:?}", reflex_from(&parsed, None));
+        let s = format!("{:?}", reflex_from(&parsed, ReflexEnv::default()));
         assert!(!s.contains("segredo-456"));
         assert!(s.contains("***"));
     }
