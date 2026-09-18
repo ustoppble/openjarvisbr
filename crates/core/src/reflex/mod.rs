@@ -330,4 +330,19 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(250)).await;
         assert!(rx.try_recv().is_err());
     }
+
+    #[tokio::test]
+    async fn from_settings_sem_chave_da_none() {
+        assert!(Reflex::from_settings(ReflexSettings::default()).is_none());
+        // ligado, mas sem chave: continua desligado
+        let sem_chave = ReflexSettings { enabled: true, ..Default::default() };
+        assert!(Reflex::from_settings(sem_chave).is_none());
+        // chave presente, mas [reflex].enabled = false: desligado
+        let desligado = ReflexSettings { api_key: Some("k".into()), ..Default::default() };
+        assert!(Reflex::from_settings(desligado).is_none());
+        let s = ReflexSettings { enabled: true, api_key: Some("segredo-xyz".into()), ..Default::default() };
+        let (reflex, _rx) = Reflex::from_settings(s).unwrap();
+        assert!(reflex.enabled());
+        assert!(!format!("{reflex:?}").contains("segredo-xyz"), "Debug não pode vazar a chave");
+    }
 }
