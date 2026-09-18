@@ -8,4 +8,5 @@ pub mod engine_tools;
 pub mod live;
 pub mod mcp;
 pub mod profiles;
+pub mod reflex;
 pub mod tools;
