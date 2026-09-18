@@ -6,14 +6,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 
-// TEMP até card A: `crate::config::SiteConfig` ainda não existe; este stub
-// tem o mesmo shape do plano (Task 4) e deve ser apagado quando o card A
-// mesclar, trocando por `use crate::config::SiteConfig;`.
-#[derive(Debug, Clone, PartialEq, serde::Deserialize, serde::Serialize)]
-pub struct SiteConfig {
-    pub name: String,
-    pub url: String,
-}
+pub use crate::config::SiteConfig;
 
 /// Um app conhecido pelo Olho: nome do bundle (sem `.app`) e se está rodando.
 #[derive(Debug, Clone, PartialEq, Eq)]
