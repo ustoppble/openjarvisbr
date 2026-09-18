@@ -54,6 +54,24 @@ struct Cli {
     /// Ativa logs em nível debug
     #[arg(long)]
     debug: bool,
+
+    #[command(subcommand)]
+    command: Option<Sub>,
+}
+
+#[derive(clap::Subcommand, Debug)]
+enum Sub {
+    /// Diagnóstico do reflexo (Jev): pergunta com uma frase ou lista o inventário
+    Reflex {
+        /// Frase como se fosse a transcrição do usuário
+        phrase: Option<String>,
+        /// Só imprime o inventário do Olho (apps rodando, instalados, sites)
+        #[arg(long)]
+        eye: bool,
+        /// Simula confirmação pendente (testa "sim"/"não")
+        #[arg(long)]
+        pending: bool,
+    },
 }
 
 /// Garante uma única instância por usuário: um segundo `jarvis` ouviria o
@@ -94,6 +112,13 @@ fn acquire_single_instance_lock() -> Result<std::fs::File, String> {
 fn main() {
     let cli = Cli::parse();
     init_tracing(cli.debug);
+
+    // Diagnóstico do reflexo não abre microfone nem Gemini: roda antes do
+    // lock de instância única e da exigência de chave do Gemini.
+    if let Some(Sub::Reflex { phrase, eye, pending }) = cli.command {
+        let runtime = tokio::runtime::Runtime::new().expect("runtime");
+        std::process::exit(runtime.block_on(reflex_diagnostic(phrase, eye, pending)));
+    }
 
     if cli.list_profiles {
         let settings = config::load_settings();
@@ -171,6 +196,90 @@ fn main() {
     };
     let exit_code = runtime.block_on(term::run(handle, barge_in, fx_amount, record_dir));
     std::process::exit(exit_code);
+}
+
+/// `jarvis reflex [frase] [--eye] [--pending]`: mostra o inventário do Olho,
+/// as perguntas que o reflexo faria ao Jev para a frase, as respostas com
+/// confiança, a decisão e a latência. Códigos: 0 ok, 2 sem chave/desligado,
+/// 3 erro do Jev. A chave nunca é impressa.
+async fn reflex_diagnostic(phrase: Option<String>, only_eye: bool, pending: bool) -> i32 {
+    use openjarvisbr_core::reflex::decide::{build_questions, decide, Situation, Thresholds};
+    use openjarvisbr_core::reflex::eye::{Eye, SiteConfig as EyeSite};
+    use openjarvisbr_core::reflex::judge::{JevClient, Judge};
+
+    let settings = config::load_reflex();
+    // config e eye têm cada um o seu `SiteConfig` (mesmos campos); converte aqui.
+    let sites: Vec<EyeSite> = settings
+        .sites
+        .iter()
+        .map(|s| EyeSite { name: s.name.clone(), url: s.url.clone() })
+        .collect();
+    let eye = Eye::start(sites);
+    // Dá tempo ao primeiro scan (apps instalados + rodando) terminar.
+    tokio::time::sleep(std::time::Duration::from_millis(1200)).await;
+    let inv = eye.snapshot();
+    if only_eye || phrase.is_none() {
+        let running: Vec<&str> = inv.running_apps.iter().map(|a| a.name.as_str()).collect();
+        let sites: Vec<&str> = inv.sites.iter().map(|s| s.name.as_str()).collect();
+        println!("apps rodando ({}): {}", running.len(), running.join(", "));
+        println!("apps instalados: {}", inv.installed_apps.len());
+        println!("sites ({}): {}", sites.len(), sites.join(", "));
+        println!(
+            "reflexo: {}",
+            if settings.enabled { "ligado" } else { "desligado (sem chave ou enabled = false)" }
+        );
+        return 0;
+    }
+    let phrase = phrase.unwrap_or_default();
+    let situation = Situation {
+        heard: &phrase,
+        inventory: &inv,
+        pending_confirm: pending,
+        turn_locked: false,
+    };
+    let Some(questions) = build_questions(&situation) else {
+        println!("nada a perguntar para essa frase");
+        return 0;
+    };
+    let ids: Vec<&str> = questions.0.keys().map(|k| k.as_str()).collect();
+    println!("perguntas ({}): {}", questions.len(), ids.join(", "));
+    if !settings.enabled {
+        eprintln!("reflexo desligado: configure typesafe_api_key no config.toml ou TYPESAFE_API_KEY");
+        return 2;
+    }
+    let client = match JevClient::new(settings.api_key.clone().unwrap_or_default(), settings.model.clone()) {
+        Ok(client) => client,
+        Err(err) => {
+            eprintln!("{err}");
+            return 2;
+        }
+    };
+    let t0 = std::time::Instant::now();
+    let answers = match client.ask(&phrase, &questions).await {
+        Ok(answers) => answers,
+        Err(err) => {
+            eprintln!("erro do Jev: {err}");
+            return 3;
+        }
+    };
+    let ms = t0.elapsed().as_millis();
+    for id in questions.0.keys() {
+        if let Some((pick, conf)) = answers.choice(id) {
+            println!("  {id:<8} → {pick} ({conf:.2})");
+        } else if let Some(v) = answers.noul(id) {
+            println!("  {id:<8} → {v:.2}");
+        }
+    }
+    let thresholds = Thresholds {
+        act: settings.act_threshold,
+        confirm: settings.confirm_threshold,
+    };
+    println!("decisão: {:?}", decide(&situation, &answers, &thresholds));
+    println!(
+        "latência: {ms} ms · tokens {}+{}",
+        answers.usage.input_tokens, answers.usage.output_tokens
+    );
+    0
 }
 
 fn init_tracing(debug: bool) {
