@@ -103,7 +103,8 @@ def parse(lines: list[str], since: str | None) -> list[Turn]:
             continue
 
         if msg.startswith("usuário disse "):
-            text = msg.split("texto=", 1)[-1]
+            # `usuário disse texto=... via="voz"`: o campo via vem depois do texto
+            text = re.sub(r'\s+via="[^"]*"$', "", msg.split("texto=", 1)[-1])
             if cur is None or cur.ended:
                 cur = Turn(started=ts)
                 turns.append(cur)
