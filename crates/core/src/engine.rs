@@ -2764,8 +2764,10 @@ mod tests {
             .send(ServerEvent::ToolCall(vec![ToolCall { id: "g2".into(), ..call.clone() }]))
             .await
             .unwrap();
-        assert!(wait_tool_result(&mut events, "g1").await.0);
+        // a repetida é respondida na hora, antes de g1 terminar de executar:
+        // por isso espera g2 primeiro (o helper descarta eventos não pedidos)
         assert!(wait_tool_result(&mut events, "g2").await.0, "a repetida recebe sucesso");
+        assert!(wait_tool_result(&mut events, "g1").await.0);
         assert_eq!(spy.count(), 1, "dedup modelo→modelo na mesma fala");
 
         // fala nova, mesma ação: executa de novo
