@@ -1,6 +1,7 @@
 //! Ponto de entrada da OpenJarvisBR: parseia flags, carrega config, sobe o
 //! Engine e mostra no terminal o que ele publica.
 
+mod script;
 mod term;
 
 use clap::Parser;
@@ -50,6 +51,12 @@ struct Cli {
     /// Lista os perfis disponíveis (embutidos + os do config.toml) e sai
     #[arg(long)]
     list_profiles: bool,
+
+    /// Modo roteiro: manda cada linha do arquivo como fala do usuário (mic
+    /// mudo), espera o turno terminar e sai. Para medir sem falar; combine
+    /// com RUST_LOG=openjarvisbr_core=debug e tools/jarvis_trace_report.py
+    #[arg(long, value_name = "ARQUIVO")]
+    script: Option<std::path::PathBuf>,
 
     /// Ativa logs em nível debug
     #[arg(long)]
@@ -195,7 +202,10 @@ fn main() {
             std::process::exit(err.exit_code());
         }
     };
-    let exit_code = runtime.block_on(term::run(handle, barge_in, fx_amount, record_dir));
+    let exit_code = match cli.script.as_deref() {
+        Some(path) => runtime.block_on(script::run(handle, path)),
+        None => runtime.block_on(term::run(handle, barge_in, fx_amount, record_dir)),
+    };
     std::process::exit(exit_code);
 }
 

@@ -238,6 +238,8 @@ impl EngineError {
 
 enum Command {
     Mute(bool),
+    /// Texto digitado como fala do usuário (modo texto / roteiro).
+    UserText(String),
     Reconnect,
     SetFxAmount(f32),
     SetFullAccess(bool),
@@ -266,6 +268,17 @@ impl EngineHandle {
     /// Derruba a sessão atual e conecta de novo com a mesma config.
     pub fn reconnect(&self) {
         let _ = self.commands.send(Command::Reconnect);
+    }
+
+    /// Manda `text` como se o usuário tivesse falado: passa pelo reflexo,
+    /// pela confirmação por voz e vira um turno de usuário na Live API
+    /// (`clientContent`, `turnComplete`). Vazio é ignorado.
+    pub fn send_user_text(&self, text: &str) {
+        let text = text.trim();
+        if text.is_empty() {
+            return;
+        }
+        let _ = self.commands.send(Command::UserText(text.to_string()));
     }
 
     /// Ajusta o efeito de voz ao vivo (0..1).
@@ -825,6 +838,7 @@ impl Worker {
                         self.update_state();
                     }
                     Some(Command::ConfirmTool { id, approve }) => self.resolve_confirm(&id, approve, "botão"),
+                    Some(Command::UserText(text)) => self.on_typed_text(text),
                     Some(Command::SetFxAmount(amount)) => self.voice_fx = VoiceFx::new(amount),
                     Some(Command::SetFullAccess(on)) => self.set_full_access(on),
                     Some(Command::SetAlwaysAllow(names)) => self.set_always_allow(names),
@@ -920,20 +934,7 @@ impl Worker {
                 self.emit.send(EngineEvent::TurnComplete);
                 self.update_state();
             }
-            Some(ServerEvent::UserText(text)) => {
-                debug!(texto = %text, "usuário disse");
-                if let Some(r) = self.recorder.as_mut() {
-                    r.event("user_text", &text);
-                }
-                self.user_heard.push_str(&text);
-                if let Some(reflex) = &self.reflex {
-                    reflex.hear(self.user_heard.clone(), !self.confirms.is_empty());
-                }
-                if !self.hear_always_allow() {
-                    self.hear_confirmation(&text);
-                }
-                self.emit.send(EngineEvent::UserText(text));
-            }
+            Some(ServerEvent::UserText(text)) => self.on_user_text(text, "voz"),
             Some(ServerEvent::ModelText(text)) => {
                 debug!(texto = %text, "modelo disse");
                 if let Some(r) = self.recorder.as_mut() {
@@ -1078,6 +1079,32 @@ impl Worker {
         }
         if let Err(err) = config::save_always_allow(&self.decisions.always_allow()) {
             warn!(erro = %err, "não foi possível gravar [tools].always_allow");
+        }
+    }
+
+    /// Fala do usuário (transcrição da Live API ou texto digitado): alimenta
+    /// o reflexo e a confirmação por voz, grava e publica.
+    fn on_user_text(&mut self, text: String, via: &'static str) {
+        debug!(texto = %text, via, "usuário disse");
+        if let Some(r) = self.recorder.as_mut() {
+            r.event("user_text", &text);
+        }
+        self.user_heard.push_str(&text);
+        if let Some(reflex) = &self.reflex {
+            reflex.hear(self.user_heard.clone(), !self.confirms.is_empty());
+        }
+        if !self.hear_always_allow() {
+            self.hear_confirmation(&text);
+        }
+        self.emit.send(EngineEvent::UserText(text));
+    }
+
+    /// Texto digitado (modo texto): mesmo caminho da transcrição e, em
+    /// seguida, um turno de usuário para o modelo responder.
+    fn on_typed_text(&mut self, text: String) {
+        self.on_user_text(text.clone(), "texto");
+        if let Some(session) = self.session.as_ref() {
+            session.send_text(&text);
         }
     }
 
@@ -1694,7 +1721,10 @@ impl Worker {
                         Some(Command::SetAlwaysAllow(names)) => {
                             self.decisions.set_always_allow(&names);
                         }
-                        Some(Command::Reconnect) | Some(Command::ConfirmTool { .. }) => {}
+                        // Sem sessão ainda: texto digitado durante a conexão é descartado.
+                        Some(Command::Reconnect)
+                        | Some(Command::ConfirmTool { .. })
+                        | Some(Command::UserText(_)) => {}
                         Some(Command::Stop) | None => break Connected::Stopped,
                     },
                 }
@@ -2140,6 +2170,89 @@ mod tests {
             debounce_ms: 10,
             ..Default::default()
         }
+    }
+
+    #[tokio::test]
+    async fn texto_digitado_vira_fala_do_usuario_e_passa_pelo_reflexo() {
+        use crate::reflex::eye::Eye;
+        use crate::reflex::judge::FakeJudge;
+        use crate::reflex::questions::{Answer, Answers};
+        use std::collections::BTreeMap;
+
+        #[derive(Clone, Default)]
+        struct SpyOpen(Arc<Mutex<Vec<serde_json::Value>>>);
+        #[async_trait::async_trait]
+        impl crate::tools::Tool for SpyOpen {
+            fn spec(&self) -> ToolSpec {
+                ToolSpec {
+                    name: "app.open".into(),
+                    description: "spy".into(),
+                    parameters: serde_json::json!({"type": "object"}),
+                    risk: Risk::Safe,
+                }
+            }
+            async fn call(&self, args: serde_json::Value) -> Result<serde_json::Value, ToolError> {
+                self.0.lock().unwrap().push(args);
+                Ok(serde_json::json!({"status": "aberto"}))
+            }
+        }
+
+        let dir = std::env::temp_dir().join(format!("engine-typed-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("Safari.app")).unwrap();
+        let eye = Eye::start_with(vec![dir], vec![], Arc::new(NoProbe), Duration::from_secs(3600), Duration::from_secs(3600));
+        let judge = Arc::new(FakeJudge::new());
+        let mut answers = Answers::default();
+        for (id, pick) in [("intent", "open_app"), ("app", "Safari")] {
+            let mut p = BTreeMap::new();
+            p.insert(pick.to_string(), 0.96);
+            p.insert("none".to_string(), 0.04);
+            answers.answers.insert(id.into(), Answer::Choice { choice: pick.into(), probabilities: p, confidence: 0.96 });
+        }
+        judge.push(answers);
+
+        let spy = SpyOpen::default();
+        let (_script_tx, script_rx) = mpsc::channel(16);
+        let (_mic_tx, mic_rx) = mpsc::channel(16);
+        let mut fake = fake::FakeBackend::new(script_rx, mic_rx);
+        fake.registry.register(Box::new(spy.clone()));
+        let fake = fake.with_reflex(judge.clone(), eye);
+        let mut config = test_config();
+        config.tools = vec!["*".into()];
+        config.reflex = reflex_settings();
+        let handle = start_with(config, Backend::Fake(fake)).await.unwrap();
+        let mut events = handle.events();
+
+        // vazio é ignorado; texto vira evento UserText e chega ao juiz
+        handle.send_user_text("   ");
+        handle.send_user_text("  abre o safari  ");
+        let heard = loop {
+            match next_non_level(&mut events).await {
+                EngineEvent::UserText(text) => break text,
+                EngineEvent::Error { message, .. } => panic!("{message}"),
+                _ => {}
+            }
+        };
+        assert_eq!(heard, "abre o safari");
+        let acted = loop {
+            match next_non_level(&mut events).await {
+                EngineEvent::ReflexActed { call, .. } => break call,
+                EngineEvent::Error { message, .. } => panic!("{message}"),
+                _ => {}
+            }
+        };
+        assert_eq!(acted.name, "app.open");
+        loop {
+            if let EngineEvent::ToolResult { id, ok, .. } = next_non_level(&mut events).await {
+                if id == acted.id {
+                    assert!(ok);
+                    break;
+                }
+            }
+        }
+        assert_eq!(spy.0.lock().unwrap().len(), 1);
+        assert_eq!(judge.calls().len(), 1, "o juiz foi consultado uma vez, com o texto digitado");
+        assert_eq!(judge.calls()[0].0, "abre o safari");
+        handle.stop().await;
     }
 
     #[tokio::test]

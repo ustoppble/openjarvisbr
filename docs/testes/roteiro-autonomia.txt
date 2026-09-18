@@ -1,0 +1,22 @@
+# Roteiro de aceitação — missão "Autonomia do Jarvis"
+# Rode: RUST_LOG="info,openjarvisbr_core=debug,openjarvisbr_core::audio=warn" \
+#       cargo run --release --bin jarvis -- --script docs/testes/roteiro-autonomia.txt 2>> /tmp/jarvis-trace.log
+# Depois: tools/jarvis_trace_report.py /tmp/jarvis-trace.log --since <ISO da rodada>
+# Régua: duplicatas=0, falhas=0, "não é possível"=0.
+abre o Safari
+sleep 2
+abre o google.com no Safari
+sleep 2
+abre o Chrome
+sleep 2
+abre o youtube no Chrome
+sleep 2
+volta
+pesquisa overclock
+abre a Calculadora
+abre a globo
+sleep 2
+abre a globo
+diminui o som
+coloca o volume em 30
+que horas são?
