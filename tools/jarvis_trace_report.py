@@ -158,6 +158,28 @@ def parse(lines: list[str], since: str | None) -> list[Turn]:
     return turns
 
 
+RECUSAS = [
+    "não é possível",
+    "não consigo",
+    "não posso",
+    "não tenho como",
+    "não sou capaz",
+]
+
+
+def recusa(texto: str) -> bool:
+    """O modelo disse que não dá para fazer.
+
+    A fala chega em pedaços (`modelo disse` várias vezes no mesmo turno) e o
+    pedaço anterior costuma grudar no começo: "no históricoNão consigo
+    realizar pesquisas". Por isso a busca é no texto do turno inteiro, já
+    juntado, e sem diferenciar maiúscula — "Não consigo" é a forma mais comum
+    e passava batido.
+    """
+    baixo = texto.lower()
+    return any(p in baixo for p in RECUSAS)
+
+
 def duplicates(turn: Turn) -> list[str]:
     # Chave = tool + resultado (o reflexo não tem "pedido"; o resultado das
     # duas origens é idêntico quando a ação é a mesma).
@@ -190,7 +212,9 @@ def report(turns: list[Turn]) -> str:
         reqs = [t.at_request or t.at_done for t in tr.tools.values() if (t.at_request or t.at_done)]
         if tr.user and reqs:
             fala_acao.append(ts_ms(min(reqs)) - ts_ms(tr.started))
-    impossivel = [tr for tr in turns if any("não é possível" in m or "não consigo" in m for m in ["".join(tr.model)])]
+    impossivel = [(tr, texto) for tr in turns
+                  for texto in ["".join(tr.model)]
+                  if recusa(texto)]
 
     lines += ["## Resumo", ""]
     lines.append(f"- Turnos com fala do usuário: {sum(1 for t in turns if t.user)}")
@@ -204,6 +228,10 @@ def report(turns: list[Turn]) -> str:
         lines.append(f"- Transcrição→primeira tool: média {int(statistics.mean(fala_acao))} ms, máx {int(max(fala_acao))} ms "
                      "(a transcrição chega junto com a chamada; o fim da fala real não está no trace)")
     lines.append(f"- Respostas 'não é possível/não consigo': {len(impossivel)}")
+    for tr, texto in impossivel:
+        n = turns.index(tr) + 1
+        fala = ' '.join(tr.user).strip() or '(sem fala)'
+        lines.append(f"  - turno {n} \"{fala}\" → \"{texto[:120]}{'…' if len(texto) > 120 else ''}\"")
     lines.append("")
 
     lines += ["## Turnos", ""]
