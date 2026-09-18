@@ -661,6 +661,10 @@ struct Worker {
     /// Chamadas do modelo ainda não terminadas → o que o usuário tinha dito
     /// quando chegaram. Sem erro no fim, a ação fica aprendida com essa frase.
     pending_learn: HashMap<String, String>,
+    /// Chamadas que o modelo pediu nesta fala do usuário (zerada quando uma
+    /// fala nova começa; vale `REFLEX_DONE_WINDOW`). O reflexo não repete o
+    /// que o modelo já pediu, e o modelo não repete a si mesmo.
+    model_calls: Vec<(ToolCall, Instant)>,
 }
 
 impl Worker {
@@ -773,6 +777,7 @@ impl Worker {
             _reflex_keepalive: reflex_keepalive,
             recently_done: Vec::new(),
             pending_learn: HashMap::new(),
+            model_calls: Vec::new(),
             registry,
             tool_specs,
             policy: Policy::with_full_access(full_access.clone()),
@@ -1089,6 +1094,10 @@ impl Worker {
         if let Some(r) = self.recorder.as_mut() {
             r.event("user_text", &text);
         }
+        if self.user_heard.is_empty() {
+            // fala nova: o que o modelo pediu na anterior não conta mais
+            self.model_calls.clear();
+        }
         self.user_heard.push_str(&text);
         if let Some(reflex) = &self.reflex {
             reflex.hear(self.user_heard.clone(), !self.confirms.is_empty());
@@ -1106,6 +1115,16 @@ impl Worker {
         if let Some(session) = self.session.as_ref() {
             session.send_text(&text);
         }
+    }
+
+    /// O modelo já pediu esta mesma (tool, args) nesta fala, dentro da janela?
+    fn model_already_called(&self, call: &ToolCall) -> bool {
+        self.model_calls.iter().any(|(done, at)| {
+            done.id != call.id
+                && done.name == call.name
+                && done.args == call.args
+                && at.elapsed() < engine_tools::REFLEX_DONE_WINDOW
+        })
     }
 
     /// Aplica a política: `Safe` executa já; `Confirm` segura e pergunta.
@@ -1147,6 +1166,9 @@ impl Worker {
         }
         self.pending_learn
             .insert(call.id.clone(), self.user_heard.clone());
+        self.model_calls
+            .retain(|(_, at)| at.elapsed() < engine_tools::REFLEX_DONE_WINDOW);
+        self.model_calls.push((call.clone(), Instant::now()));
         // O reflexo já pediu confirmação desta mesma ação: a chamada do modelo
         // assume o lugar dela (com a fala já ouvida), para um "sim" só rodar
         // uma vez e a resposta ir ao modelo.
@@ -1238,6 +1260,15 @@ impl Worker {
                     warn!(ferramenta = %call.name, "reflexo pediu ferramenta fora do perfil; ignorado");
                     return;
                 };
+                // O modelo chegou primeiro com a mesma ação nesta fala: o
+                // reflexo não repete (JRV-83).
+                if self.model_already_called(&call) {
+                    info!(ferramenta = %call.name, ms = outcome.latency_ms, "modelo já pediu esta ação; reflexo não repete");
+                    if let Some(r) = self.recorder.as_mut() {
+                        r.event("tool_dedup_model", format!("{} (reflexo)", engine_tools::call_summary(&call)));
+                    }
+                    return;
+                }
                 // Regra de risco, a mesma do modelo: `Safe` (ou já liberada)
                 // executa já; `Confirm` pergunta na hora, sem esperar o Gemini.
                 if self.policy.risk(&spec) == Risk::Confirm && !self.decisions.allows(&call.name) {
@@ -2625,6 +2656,45 @@ mod tests {
             .unwrap();
         assert!(wait_tool_result(&mut events, "g1").await.0);
         assert_eq!(spy.count(), 1, "dedup: não executa de novo");
+        handle.stop().await;
+    }
+
+    /// JRV-83 — trace 19:37:24: "Abrir o Safari" → modelo app.open 48 ms →
+    /// reflexo agiu 344 ms depois → app.open de novo. O reflexo não pode
+    /// repetir o que o modelo já pediu nesta fala.
+    #[tokio::test]
+    async fn reflexo_nao_repete_acao_que_o_gemini_ja_pediu_nesta_fala() {
+        use crate::reflex::judge::{FakeJudge, JudgeError};
+
+        let eye = empty_eye();
+        let call = ToolCall {
+            id: "g0".into(),
+            name: "web.open".into(),
+            args: serde_json::json!({"url": "https://globo.com"}),
+        };
+        assert!(eye.learn("abre a globo", &call));
+        let judge = Arc::new(FakeJudge::with_delay(Duration::from_millis(120)));
+        judge.push(learned_answers("l0"));
+        judge.push_err(JudgeError::Timeout);
+        let spy = SpyTool::new("web.open", Risk::Safe);
+        let (handle, mut events, script_tx) = start_reflex_engine(&spy, judge, eye).await;
+
+        // transcrição e chamada do modelo chegam juntas; o juiz demora 120 ms
+        script_tx.send(ServerEvent::UserText("abre a globo".into())).await.unwrap();
+        script_tx
+            .send(ServerEvent::ToolCall(vec![ToolCall { id: "g1".into(), ..call.clone() }]))
+            .await
+            .unwrap();
+        assert!(wait_tool_result(&mut events, "g1").await.0);
+        assert_eq!(spy.count(), 1);
+        // o reflexo decide depois: não age, e nada executa de novo
+        tokio::time::sleep(Duration::from_millis(400)).await;
+        while let Ok(ev) = events.try_recv() {
+            assert!(!matches!(ev, EngineEvent::ReflexActed { .. }), "reflexo repetiu a ação do modelo");
+        }
+        assert_eq!(spy.count(), 1, "dedup modelo→reflexo");
+
+        // fala nova, mesma ação: aí o reflexo pode agir de novo
         handle.stop().await;
     }
 
