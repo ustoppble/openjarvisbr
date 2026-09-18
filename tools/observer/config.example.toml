@@ -1,0 +1,4 @@
+[[mcp_servers]]
+name = "observer"
+command = "python3"
+args = ["/caminho/absoluto/tools/observer/server.py"]

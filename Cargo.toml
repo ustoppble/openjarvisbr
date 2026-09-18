@@ -1,6 +1,11 @@
 [workspace]
 resolver = "2"
-members = ["crates/core", "crates/cli", "apps/desktop/src-tauri"]
+members = [
+    "crates/core",
+    "crates/cli",
+    "crates/observer-mcp",
+    "apps/desktop/src-tauri",
+]
 
 [workspace.dependencies]
 async-trait = "0.1"
