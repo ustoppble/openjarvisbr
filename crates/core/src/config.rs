@@ -59,6 +59,10 @@ struct FileConfig {
     profiles: Vec<Profile>,
     /// Seção `[tools]`.
     tools: Option<ToolsSection>,
+    /// Chave da TypeSafe (Jev). Também aceita a env `TYPESAFE_API_KEY`.
+    typesafe_api_key: Option<String>,
+    /// Seção `[reflex]`.
+    reflex: Option<ReflexSection>,
 }
 
 /// `[tools]` no config.toml.
@@ -74,6 +78,105 @@ pub struct ToolsSection {
     /// confirmação. Ausente = nenhuma.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub always_allow: Vec<String>,
+}
+
+/// `[reflex]` no config.toml.
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+pub struct ReflexSection {
+    pub enabled: Option<bool>,
+    pub model: Option<String>,
+    pub act_threshold: Option<f32>,
+    pub confirm_threshold: Option<f32>,
+    pub debounce_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sites: Vec<SiteConfig>,
+}
+
+/// Um site que o reflexo pode abrir por voz (`[[reflex.sites]]`).
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+pub struct SiteConfig {
+    pub name: String,
+    pub url: String,
+}
+
+/// Configuração resolvida do reflexo. `Debug` manual: nunca imprime a chave.
+#[derive(Clone)]
+pub struct ReflexSettings {
+    pub enabled: bool,
+    pub api_key: Option<String>,
+    pub model: String,
+    pub act_threshold: f32,
+    pub confirm_threshold: f32,
+    pub debounce_ms: u64,
+    pub sites: Vec<SiteConfig>,
+}
+
+impl fmt::Debug for ReflexSettings {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ReflexSettings")
+            .field("enabled", &self.enabled)
+            .field("api_key", &self.api_key.as_ref().map(|_| "***"))
+            .field("model", &self.model)
+            .field("act_threshold", &self.act_threshold)
+            .field("confirm_threshold", &self.confirm_threshold)
+            .field("debounce_ms", &self.debounce_ms)
+            .field("sites", &self.sites)
+            .finish()
+    }
+}
+
+impl Default for ReflexSettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            api_key: None,
+            model: "jev-latest".into(),
+            act_threshold: 0.85,
+            confirm_threshold: 0.85,
+            debounce_ms: 120,
+            sites: Vec::new(),
+        }
+    }
+}
+
+/// Env que fornece a chave da TypeSafe (vence a do arquivo).
+pub const ENV_TYPESAFE_KEY: &str = "TYPESAFE_API_KEY";
+
+/// Resolve `[reflex]` + chave. `env_key` é o valor da env já lido (injetável
+/// nos testes). Sem chave = desligado; `enabled = false` vence a chave.
+fn reflex_from(parsed: &FileConfig, env_key: Option<String>) -> ReflexSettings {
+    let d = ReflexSettings::default();
+    let api_key = env_key
+        .filter(|k| !k.is_empty())
+        .or_else(|| parsed.typesafe_api_key.clone().filter(|k| !k.is_empty()));
+    let s = parsed.reflex.clone().unwrap_or_default();
+    ReflexSettings {
+        enabled: api_key.is_some() && s.enabled.unwrap_or(true),
+        api_key,
+        model: s
+            .model
+            .filter(|m| !m.trim().is_empty())
+            .unwrap_or(d.model),
+        act_threshold: s
+            .act_threshold
+            .unwrap_or(d.act_threshold)
+            .clamp(0.5, 1.0),
+        confirm_threshold: s
+            .confirm_threshold
+            .unwrap_or(d.confirm_threshold)
+            .clamp(0.5, 1.0),
+        debounce_ms: s.debounce_ms.unwrap_or(d.debounce_ms),
+        sites: s.sites,
+    }
+}
+
+/// Lê a configuração do reflexo do config.toml e da env.
+pub fn load_reflex() -> ReflexSettings {
+    let env_key = std::env::var(ENV_TYPESAFE_KEY).ok();
+    let Some(path) = config_path() else {
+        return reflex_from(&FileConfig::default(), env_key);
+    };
+    reflex_from(&read_file_config(&path), env_key)
 }
 
 /// Globs de ferramentas para o motor: nenhum com `[tools].enabled = false`,
@@ -208,6 +311,8 @@ pub struct Settings {
     pub full_access: bool,
     /// `[tools].always_allow` (JRV-66).
     pub always_allow: Vec<String>,
+    /// `[reflex]` + `typesafe_api_key` já resolvidos.
+    pub reflex: ReflexSettings,
 }
 
 /// Estilo do overlay já resolvido: `surreal` (padrão) ou `orb`.
@@ -245,6 +350,10 @@ struct FileConfigOut {
     profiles: Vec<Profile>,
     #[serde(skip_serializing_if = "Option::is_none")]
     tools: Option<ToolsSection>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    typesafe_api_key: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reflex: Option<ReflexSection>,
 }
 
 /// Campos que a janela de configurações grava. `api_key` só vem preenchido
@@ -326,6 +435,7 @@ pub fn load_settings() -> Settings {
     let Ok(parsed) = toml::from_str::<FileConfig>(&contents) else {
         return Settings::default();
     };
+    let reflex = reflex_from(&parsed, std::env::var(ENV_TYPESAFE_KEY).ok());
     Settings {
         system_prompt: parsed.system_prompt.filter(|s| !s.trim().is_empty()),
         voice: parsed.voice.filter(|s| !s.trim().is_empty()),
@@ -349,6 +459,7 @@ pub fn load_settings() -> Settings {
             .tools
             .map(|t| crate::tools::decisions::clean(&t.always_allow))
             .unwrap_or_default(),
+        reflex,
     }
 }
 
@@ -413,6 +524,8 @@ pub fn save(update: SaveSettings) -> Result<(), ConfigError> {
             .or(existing.profile),
         profiles: existing.profiles,
         tools: existing.tools,
+        typesafe_api_key: existing.typesafe_api_key,
+        reflex: existing.reflex,
     };
 
     write_file_config(&path, &out)
@@ -440,6 +553,8 @@ pub fn save_profile(id: &str) -> Result<(), ConfigError> {
         profile: Some(id.to_string()),
         profiles: existing.profiles.clone(),
         tools: existing.tools.clone(),
+        typesafe_api_key: existing.typesafe_api_key.clone(),
+        reflex: existing.reflex.clone(),
     };
     write_file_config(&path, &out)
 }
@@ -461,20 +576,54 @@ pub fn save_always_allow(names: &[String]) -> Result<(), ConfigError> {
 
 /// Troca uma chave de `[tools]` preservando literalmente o resto do arquivo.
 fn save_tools_value(key: &str, value: toml::Value) -> Result<(), ConfigError> {
+    save_section_value("tools", key, value)
+}
+
+/// Grava só `[reflex].enabled`, preservando o resto do arquivo.
+pub fn save_reflex_enabled(on: bool) -> Result<(), ConfigError> {
+    save_section_value("reflex", "enabled", toml::Value::Boolean(on))
+}
+
+/// Grava `typesafe_api_key` na raiz do config.toml. Vazio remove a chave.
+/// A chave nunca passa pelo log.
+pub fn save_typesafe_api_key(key: &str) -> Result<(), ConfigError> {
+    let key = key.trim();
+    edit_table(|table| {
+        if key.is_empty() {
+            table.remove("typesafe_api_key");
+        } else {
+            table.insert(
+                "typesafe_api_key".to_string(),
+                toml::Value::String(key.to_string()),
+            );
+        }
+    })
+}
+
+/// Troca uma chave de uma seção (`[section]`) preservando literalmente o
+/// resto do arquivo (inclusive seções que o core não modela).
+fn save_section_value(section: &str, key: &str, value: toml::Value) -> Result<(), ConfigError> {
+    edit_table(|table| {
+        let entry = table
+            .entry(section)
+            .or_insert_with(|| toml::Value::Table(toml::Table::new()));
+        if !entry.is_table() {
+            *entry = toml::Value::Table(toml::Table::new());
+        }
+        if let Some(entry) = entry.as_table_mut() {
+            entry.insert(key.to_string(), value);
+        }
+    })
+}
+
+/// Lê o config.toml como tabela crua, aplica `edit` e regrava.
+fn edit_table(edit: impl FnOnce(&mut toml::Table)) -> Result<(), ConfigError> {
     let path = config_path().ok_or(ConfigError::NoHome)?;
     let mut table = std::fs::read_to_string(&path)
         .ok()
         .and_then(|contents| contents.parse::<toml::Table>().ok())
         .unwrap_or_default();
-    let tools = table
-        .entry("tools")
-        .or_insert_with(|| toml::Value::Table(toml::Table::new()));
-    if !tools.is_table() {
-        *tools = toml::Value::Table(toml::Table::new());
-    }
-    if let Some(tools) = tools.as_table_mut() {
-        tools.insert(key.to_string(), value);
-    }
+    edit(&mut table);
     let contents = toml::to_string_pretty(&table).map_err(ConfigError::SerializeFile)?;
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|err| ConfigError::WriteFile(path.clone(), err))?;
@@ -816,5 +965,55 @@ mod tests {
         let msg = ConfigError::MissingKey.to_string();
         assert!(msg.contains("GEMINI_API_KEY"));
         assert!(msg.contains("config.toml"));
+    }
+
+    #[test]
+    fn reflex_le_secao_e_sites() {
+        let raw = r#"
+typesafe_api_key = "ts-xyz"
+[reflex]
+enabled = true
+act_threshold = 0.9
+[[reflex.sites]]
+name = "YouTube"
+url = "https://youtube.com"
+"#;
+        let parsed: FileConfig = toml::from_str(raw).unwrap();
+        let r = reflex_from(&parsed, None);
+        assert!(r.enabled);
+        assert_eq!(r.api_key.as_deref(), Some("ts-xyz"));
+        assert_eq!(r.model, "jev-latest");
+        assert!((r.act_threshold - 0.9).abs() < 1e-6);
+        assert!((r.confirm_threshold - 0.85).abs() < 1e-6);
+        assert_eq!(r.debounce_ms, 120);
+        assert_eq!(r.sites.len(), 1);
+        assert_eq!(r.sites[0].name, "YouTube");
+    }
+
+    #[test]
+    fn reflex_sem_chave_fica_desligado_e_env_vence_arquivo() {
+        let parsed: FileConfig = toml::from_str("").unwrap();
+        let r = reflex_from(&parsed, None);
+        assert!(!r.enabled);
+        assert!(r.api_key.is_none());
+        let parsed: FileConfig = toml::from_str("typesafe_api_key = \"arquivo\"").unwrap();
+        let r = reflex_from(&parsed, Some("env".to_string()));
+        assert_eq!(r.api_key.as_deref(), Some("env"));
+        assert!(r.enabled);
+    }
+
+    #[test]
+    fn reflex_enabled_false_vence_chave() {
+        let parsed: FileConfig =
+            toml::from_str("typesafe_api_key = \"x\"\n[reflex]\nenabled = false").unwrap();
+        assert!(!reflex_from(&parsed, None).enabled);
+    }
+
+    #[test]
+    fn reflex_debug_nao_vaza_chave() {
+        let parsed: FileConfig = toml::from_str("typesafe_api_key = \"segredo-456\"").unwrap();
+        let s = format!("{:?}", reflex_from(&parsed, None));
+        assert!(!s.contains("segredo-456"));
+        assert!(s.contains("***"));
     }
 }
