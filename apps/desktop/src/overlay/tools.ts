@@ -3,6 +3,9 @@
 //
 // Contrato do evento `engine://tool` (spec v3 › engine.rs eventos):
 // { kind: "requested" | "confirm_needed" | "result", id, name, summary, ok? }
+//
+// Contrato do evento `engine://reflex` (spec v4 › reflexo com Jev):
+// { kind: "acted" | "confirmed", name?, summary?, latency_ms?, approve? }
 import { invoke } from "@tauri-apps/api/core";
 import { listen, UnlistenFn } from "@tauri-apps/api/event";
 
@@ -14,6 +17,14 @@ export interface ToolEventPayload {
     ok?: boolean;
 }
 
+export interface ReflexEventPayload {
+    kind: "acted" | "confirmed";
+    name?: string;
+    summary?: string;
+    latency_ms?: number;
+    approve?: boolean;
+}
+
 export interface ToolStripHost {
     /** Mostra o overlay e cancela o auto-hide pendente. */
     show(): void;
@@ -22,8 +33,11 @@ export interface ToolStripHost {
 }
 
 type Mode = "idle" | "running" | "confirm" | "result";
+type Tone = "" | "ok" | "fail" | "reflex";
 
 const RESULT_VISIBLE_MS = 4000;
+// Flash do reflexo: sem botões, some sozinho.
+const REFLEX_VISIBLE_MS = 2500;
 // O Engine nega sozinho em 20s; passou disso sem `result`, a faixa some.
 const CONFIRM_STALE_MS = 25000;
 
@@ -32,6 +46,7 @@ export class ToolStrip {
     private currentId: string | null = null;
     private timer: number | null = null;
     private unlisten: UnlistenFn | null = null;
+    private unlistenReflex: UnlistenFn | null = null;
     private readonly container: HTMLElement;
     private readonly strip: HTMLElement;
     private readonly textEl: HTMLElement;
@@ -50,6 +65,9 @@ export class ToolStrip {
 
     async initialize() {
         this.unlisten = await listen<ToolEventPayload>("engine://tool", (event) => this.handle(event.payload));
+        this.unlistenReflex = await listen<ReflexEventPayload>("engine://reflex", (event) =>
+            this.handleReflex(event.payload)
+        );
     }
 
     /** Enquanto há pedido, execução ou resultado na tela, o overlay não some. */
@@ -80,6 +98,20 @@ export class ToolStrip {
         }
     }
 
+    /** Flash "⚡ reflexo": ação ou confirmação resolvida pelo Jev, sem botões. */
+    handleReflex(payload: ReflexEventPayload) {
+        if (!payload || !payload.kind) return;
+        // Não atropela um pedido de confirmação que ainda espera o clique.
+        if (this.mode === "confirm") return;
+        console.log(`[Overlay] Reflexo ${payload.kind}: ${payload.summary ?? payload.name ?? ""}`);
+
+        const text = payload.kind === "acted"
+            ? `⚡ reflexo · ${payload.summary ?? payload.name ?? ""} · ${payload.latency_ms ?? 0} ms`
+            : `⚡ reflexo · ${payload.approve ? "aprovado" : "negado"} por voz`;
+        this.render(`reflex:${Date.now()}`, "result", text, "reflex");
+        this.schedule(REFLEX_VISIBLE_MS);
+    }
+
     private async answer(approve: boolean) {
         const id = this.currentId;
         if (this.mode !== "confirm" || id === null) return;
@@ -93,7 +125,7 @@ export class ToolStrip {
         }
     }
 
-    private render(id: string, mode: Exclude<Mode, "idle">, text: string, tone: "" | "ok" | "fail" = "") {
+    private render(id: string, mode: Exclude<Mode, "idle">, text: string, tone: Tone = "") {
         const wasIdle = this.mode === "idle";
         const wasInteractive = this.mode === "confirm";
         this.clearTimer();
@@ -145,5 +177,6 @@ export class ToolStrip {
     async cleanup() {
         this.clearTimer();
         if (this.unlisten) await this.unlisten();
+        if (this.unlistenReflex) await this.unlistenReflex();
     }
 }
