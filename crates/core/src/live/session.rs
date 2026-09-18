@@ -188,6 +188,7 @@ impl Backoff {
 pub struct LiveSession {
     audio_tx: mpsc::Sender<Vec<i16>>,
     tool_tx: mpsc::Sender<Vec<ToolResult>>,
+    text_tx: mpsc::Sender<String>,
     events: mpsc::Receiver<ServerEvent>,
     fatal: Arc<Mutex<Option<LiveError>>>,
     task: tokio::task::JoinHandle<()>,
@@ -212,6 +213,7 @@ impl LiveSession {
 
         let (audio_tx, audio_rx) = mpsc::channel(CHANNEL_CAPACITY);
         let (tool_tx, tool_rx) = mpsc::channel(CHANNEL_CAPACITY);
+        let (text_tx, text_rx) = mpsc::channel(CHANNEL_CAPACITY);
         let (event_tx, events) = mpsc::channel(CHANNEL_CAPACITY);
         let fatal = Arc::new(Mutex::new(None));
 
@@ -221,6 +223,7 @@ impl LiveSession {
             stream,
             audio_rx,
             tool_rx,
+            text_rx,
             event_tx,
             history: History::default(),
             pending_tools: HashMap::new(),
@@ -231,6 +234,7 @@ impl LiveSession {
         Ok(LiveSession {
             audio_tx,
             tool_tx,
+            text_tx,
             events,
             fatal,
             task,
@@ -258,6 +262,19 @@ impl LiveSession {
                 quantidade = results.len(),
                 "resposta de ferramenta perdida (sessão encerrada ou fila cheia)"
             );
+        }
+    }
+
+    /// Envia um texto como turno de usuário (`clientContent`, mesmo formato
+    /// do `greeting`): contexto do app para o modelo, ex. "o reflexo já abriu
+    /// o Safari". Como a resposta de ferramenta, não descarta: fila cheia
+    /// só com a sessão travada, e aí o aviso vai para o log.
+    pub fn send_text(&self, text: &str) {
+        if text.trim().is_empty() {
+            return;
+        }
+        if self.text_tx.try_send(text.to_string()).is_err() {
+            warn!("texto de contexto perdido (sessão encerrada ou fila cheia)");
         }
     }
 
@@ -331,6 +348,7 @@ struct Worker {
     stream: Stream,
     audio_rx: mpsc::Receiver<Vec<i16>>,
     tool_rx: mpsc::Receiver<Vec<ToolResult>>,
+    text_rx: mpsc::Receiver<String>,
     event_tx: mpsc::Sender<ServerEvent>,
     history: History,
     /// id -> nome das chamadas pedidas e ainda sem resposta, para preencher
@@ -355,6 +373,10 @@ impl Worker {
                 },
                 results = self.tool_rx.recv() => match results {
                     Some(results) => self.send_tool_response(&results).await,
+                    None => Step::Stop,
+                },
+                text = self.text_rx.recv() => match text {
+                    Some(text) => self.send_text(&text).await,
                     None => Step::Stop,
                 },
                 msg = self.stream.next() => self.handle(msg).await,
@@ -404,6 +426,22 @@ impl Worker {
             }
             Err(err) => {
                 warn!(host = HOST, erro = %scrub(&err.to_string(), &self.cfg.api_key), "falha ao enviar resposta de ferramenta");
+                Step::Reconnect
+            }
+        }
+    }
+
+    async fn send_text(&mut self, text: &str) -> Step {
+        let Ok(json) = serde_json::to_string(&ClientContentRequest::text(text)) else {
+            return Step::Continue;
+        };
+        match self.sink.send(Message::text(json)).await {
+            Ok(()) => {
+                debug!(tamanho = text.len(), "texto de contexto enviado");
+                Step::Continue
+            }
+            Err(err) => {
+                warn!(host = HOST, erro = %scrub(&err.to_string(), &self.cfg.api_key), "falha ao enviar texto de contexto");
                 Step::Reconnect
             }
         }

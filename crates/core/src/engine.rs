@@ -87,6 +87,14 @@ pub enum EngineEvent {
         ok: bool,
         summary: String,
     },
+    /// O reflexo (Jev) executou uma ação segura antes de o modelo responder.
+    ReflexActed {
+        call: ToolCall,
+        latency_ms: u32,
+        confidence: f32,
+    },
+    /// O reflexo resolveu uma confirmação pendente por voz.
+    ReflexConfirmed { approve: bool, confidence: f32 },
     /// A sessão caiu de vez. O motor segue vivo em `Error` esperando
     /// `reconnect()` ou `stop()`; o erro tipado fica em
     /// [`EngineHandle::last_error`].
@@ -144,6 +152,8 @@ pub struct EngineConfig {
     /// `[tools].always_allow`: ferramentas que nunca pedem confirmação.
     /// Muda ao vivo com [`EngineHandle::set_always_allow`].
     pub always_allow: Vec<String>,
+    /// Reflexo (Jev): desligado ou sem chave, o motor se comporta como na v3.
+    pub reflex: config::ReflexSettings,
 }
 
 impl std::fmt::Debug for EngineConfig {
@@ -160,6 +170,8 @@ impl std::fmt::Debug for EngineConfig {
             .field("tools", &self.tools)
             .field("full_access", &self.full_access)
             .field("always_allow", &self.always_allow)
+            // O `Debug` de `ReflexSettings` já mascara a chave.
+            .field("reflex", &self.reflex)
             .field(
                 "mcp_servers",
                 &self.mcp_servers.iter().map(|s| &s.name).collect::<Vec<_>>(),
@@ -416,6 +428,16 @@ impl Session {
         }
     }
 
+    /// Texto enviado como turno de usuário (mesmo caminho do `greeting`):
+    /// contexto do reflexo para o modelo.
+    fn send_text(&self, text: &str) {
+        match self {
+            Session::Live(session) => session.send_text(text),
+            #[cfg(test)]
+            Session::Fake(_) => {}
+        }
+    }
+
     async fn next_event(&mut self) -> Option<ServerEvent> {
         match self {
             Session::Live(session) => session.next_event().await,
@@ -539,6 +561,14 @@ struct Finished {
     result: ToolResult,
 }
 
+/// Ação feita pelo reflexo há pouco: uma chamada igual do modelo dentro de
+/// [`engine_tools::REFLEX_DONE_WINDOW`] recebe `output` sem executar de novo.
+struct ReflexDone {
+    call: ToolCall,
+    at: Instant,
+    output: serde_json::Value,
+}
+
 /// Resultado de esperar uma conexão enquanto comandos chegam.
 enum Connected {
     Ok(Session),
@@ -604,6 +634,14 @@ struct Worker {
     running: HashMap<String, (String, tokio::task::AbortHandle)>,
     finished_tx: mpsc::UnboundedSender<Finished>,
     finished_rx: mpsc::UnboundedReceiver<Finished>,
+    /// Reflexo (Jev); `None` desligado, sem chave ou sem dublê nos testes.
+    reflex: Option<crate::reflex::Reflex>,
+    reflex_rx: mpsc::UnboundedReceiver<crate::reflex::Outcome>,
+    /// Sender vivo quando o reflexo está desligado: um receiver órfão
+    /// devolveria `None` direto e viraria loop quente no `select!`.
+    _reflex_keepalive: Option<mpsc::UnboundedSender<crate::reflex::Outcome>>,
+    /// Ações feitas pelo reflexo, para deduplicar a chamada igual do modelo.
+    recently_done: Vec<ReflexDone>,
 }
 
 impl Worker {
@@ -685,8 +723,36 @@ impl Worker {
             }
         });
 
+        let (reflex, reflex_rx, reflex_keepalive) = match &backend {
+            #[cfg(test)]
+            Backend::Fake(fake) if fake.reflex.is_some() => {
+                let (judge, eye) = fake.reflex.clone().expect("reflexo do teste");
+                let (reflex, rx) = crate::reflex::Reflex::new(config.reflex.clone(), judge, eye);
+                (Some(reflex), rx, None)
+            }
+            Backend::Real => match crate::reflex::Reflex::from_settings(config.reflex.clone()) {
+                Some((reflex, rx)) => {
+                    info!("reflexo ligado");
+                    (Some(reflex), rx, None)
+                }
+                None => {
+                    let (tx, rx) = mpsc::unbounded_channel();
+                    (None, rx, Some(tx))
+                }
+            },
+            #[cfg(test)]
+            Backend::Fake(_) | Backend::LiveMic(_) => {
+                let (tx, rx) = mpsc::unbounded_channel();
+                (None, rx, Some(tx))
+            }
+        };
+
         let (finished_tx, finished_rx) = mpsc::unbounded_channel();
         Ok(Worker {
+            reflex,
+            reflex_rx,
+            _reflex_keepalive: reflex_keepalive,
+            recently_done: Vec::new(),
             registry,
             tool_specs,
             policy: Policy::with_full_access(full_access.clone()),
@@ -745,6 +811,7 @@ impl Worker {
                 },
                 event = next_event(&mut self.session) => self.on_server_event(event),
                 Some(done) = self.finished_rx.recv() => self.on_tool_finished(done),
+                Some(outcome) = self.reflex_rx.recv() => self.on_reflex(outcome),
                 command = self.commands.recv() => match command {
                     Some(Command::Mute(muted)) => {
                         self.muted = muted;
@@ -840,6 +907,9 @@ impl Worker {
                 self.last_model_audio = None;
                 self.speaking = false;
                 self.end_model_turn();
+                if let Some(reflex) = &self.reflex {
+                    reflex.end_turn();
+                }
                 self.emit.send(EngineEvent::TurnComplete);
                 self.update_state();
             }
@@ -848,6 +918,9 @@ impl Worker {
                     r.event("user_text", &text);
                 }
                 self.user_heard.push_str(&text);
+                if let Some(reflex) = &self.reflex {
+                    reflex.hear(self.user_heard.clone(), !self.confirms.is_empty());
+                }
                 if !self.hear_always_allow() {
                     self.hear_confirmation(&text);
                 }
@@ -869,6 +942,9 @@ impl Worker {
                 }
                 self.output.end_of_turn();
                 self.end_model_turn();
+                if let Some(reflex) = &self.reflex {
+                    reflex.end_turn();
+                }
                 self.emit.send(EngineEvent::TurnComplete);
             }
             Some(ServerEvent::GoAway) => {
@@ -1009,6 +1085,29 @@ impl Worker {
             self.respond(&call.name, ToolResult::err(&call.id, error));
             return;
         };
+        if let Some(done) = self.recently_done.iter().find(|done| {
+            done.call.name == call.name
+                && done.call.args == call.args
+                && done.at.elapsed() < engine_tools::REFLEX_DONE_WINDOW
+        }) {
+            let output = done.output.clone();
+            info!(ferramenta = %call.name, "já executada pelo reflexo; não repete");
+            if let Some(r) = self.recorder.as_mut() {
+                r.event("tool_dedup_reflex", &call.id);
+            }
+            self.emit.send(EngineEvent::ToolRequested {
+                call: call.clone(),
+                risk: Risk::Safe,
+            });
+            let output = serde_json::json!({
+                "status": "já executada",
+                "nota": "o reflexo acabou de executar exatamente esta ação; \
+                         use este resultado e não chame de novo",
+                "resultado": output,
+            });
+            self.respond(&call.name, ToolResult::ok(&call.id, output));
+            return;
+        }
         let mut risk = self.policy.risk(&spec);
         if risk == Risk::Confirm
             && self.decisions.allows(&call.name)
@@ -1061,6 +1160,97 @@ impl Worker {
                     self.resolve_confirm(&id, true, "voz, antes da chamada");
                 }
             }
+        }
+    }
+
+    /// Decisão do reflexo: age, confirma ou libera, sempre pelos caminhos que
+    /// já existem para o modelo.
+    fn on_reflex(&mut self, outcome: crate::reflex::Outcome) {
+        use crate::reflex::decide::{is_reflex_tool, Decision};
+        match outcome.decision {
+            Decision::Act(call) => {
+                if !is_reflex_tool(&call.name) || self.registry.get(&call.name).is_none() {
+                    warn!(ferramenta = %call.name, "reflexo pediu ferramenta fora da lista; ignorado");
+                    return;
+                }
+                info!(ferramenta = %call.name, ms = outcome.latency_ms, "reflexo agiu");
+                if let Some(r) = self.recorder.as_mut() {
+                    r.event(
+                        "reflex_act",
+                        format!(
+                            "{} {} {}ms",
+                            call.id,
+                            engine_tools::call_summary(&call),
+                            outcome.latency_ms
+                        ),
+                    );
+                }
+                self.recently_done
+                    .retain(|done| done.at.elapsed() < engine_tools::REFLEX_DONE_WINDOW);
+                self.recently_done.push(ReflexDone {
+                    call: call.clone(),
+                    at: Instant::now(),
+                    output: serde_json::json!({"status": "executada pelo reflexo"}),
+                });
+                self.emit.send(EngineEvent::ReflexActed {
+                    call: call.clone(),
+                    latency_ms: outcome.latency_ms,
+                    confidence: outcome.confidence,
+                });
+                self.emit.send(EngineEvent::ToolRequested {
+                    call: call.clone(),
+                    risk: Risk::Safe,
+                });
+                if let Some(session) = self.session.as_ref() {
+                    session.send_text(&engine_tools::reflex_context_text(&call));
+                }
+                self.execute(call);
+            }
+            Decision::Approve | Decision::Deny => {
+                let approve = matches!(outcome.decision, Decision::Approve);
+                let ids: Vec<String> = self.confirms.iter().map(|p| p.call.id.clone()).collect();
+                if ids.is_empty() {
+                    return;
+                }
+                self.emit.send(EngineEvent::ReflexConfirmed {
+                    approve,
+                    confidence: outcome.confidence,
+                });
+                for id in ids {
+                    self.resolve_confirm(&id, approve, "voz, reflexo");
+                }
+                self.user_heard.clear();
+            }
+            Decision::AlwaysAllow => {
+                // Reaproveita o caminho de voz com a fala atual; se a lista
+                // fixa não reconheceu a frase, libera as pendentes mesmo assim.
+                if !self.hear_always_allow() {
+                    let pending: Vec<(String, String)> = self
+                        .confirms
+                        .iter()
+                        .map(|p| (p.call.id.clone(), p.call.name.clone()))
+                        .collect();
+                    if pending.is_empty() {
+                        return;
+                    }
+                    self.emit.send(EngineEvent::ReflexConfirmed {
+                        approve: true,
+                        confidence: outcome.confidence,
+                    });
+                    let mut changed = false;
+                    for (_, name) in &pending {
+                        changed |= self.decisions.allow_always(name);
+                    }
+                    if changed {
+                        self.persist_always_allow();
+                    }
+                    for (id, _) in pending {
+                        self.resolve_confirm(&id, true, "voz, reflexo sempre pode");
+                    }
+                    self.user_heard.clear();
+                }
+            }
+            Decision::Nothing => {}
         }
     }
 
@@ -1213,18 +1403,46 @@ impl Worker {
         if self.running.remove(&done.result.id).is_none() {
             return;
         }
-        self.respond(&done.name, done.result);
+        if !done
+            .result
+            .id
+            .starts_with(crate::reflex::decide::REFLEX_CALL_PREFIX)
+        {
+            self.respond(&done.name, done.result);
+            return;
+        }
+        // Chamada do reflexo: o modelo não a pediu, e um `functionResponse`
+        // com id desconhecido é erro de protocolo. Só o evento sai. Falhou?
+        // Sai da dedup para o modelo poder tentar; deu certo? A dedup passa a
+        // devolver o resultado real.
+        let at = self
+            .recently_done
+            .iter()
+            .position(|d| d.call.id == done.result.id);
+        match (at, done.result.error.is_some()) {
+            (Some(at), true) => {
+                self.recently_done.remove(at);
+            }
+            (Some(at), false) => self.recently_done[at].output = done.result.output.clone(),
+            (None, _) => {}
+        }
+        self.emit_result(&done.name, done.result);
     }
 
     /// Devolve o resultado ao modelo e publica o evento.
     fn respond(&mut self, name: &str, result: ToolResult) {
+        if let Some(session) = self.session.as_ref() {
+            session.send_tool_response(std::slice::from_ref(&result));
+        }
+        self.emit_result(name, result);
+    }
+
+    /// Só publica o evento (e grava): para chamadas que o modelo não pediu.
+    fn emit_result(&mut self, name: &str, result: ToolResult) {
         let ok = result.error.is_none();
         let summary = engine_tools::result_summary(&result.output, result.error.as_deref());
         if let Some(r) = self.recorder.as_mut() {
             r.event("tool_result", format!("{} ok={ok} {summary}", result.id));
-        }
-        if let Some(session) = self.session.as_ref() {
-            session.send_tool_response(std::slice::from_ref(&result));
         }
         self.emit.send(EngineEvent::ToolResult {
             id: result.id,
@@ -1266,6 +1484,10 @@ impl Worker {
         self.model_turn.clear();
         self.turn_repeated = false;
         self.user_heard.clear();
+        self.recently_done.clear();
+        if let Some(reflex) = &self.reflex {
+            reflex.end_turn();
+        }
         let ids: Vec<String> = self
             .confirms
             .iter()
@@ -1499,10 +1721,14 @@ impl Recorder {
 
 #[cfg(test)]
 mod fake {
+    use std::sync::Arc;
+
     use tokio::sync::mpsc;
 
     use super::ToolTimeouts;
     use crate::live::protocol::ServerEvent;
+    use crate::reflex::eye::EyeHandle;
+    use crate::reflex::judge::Judge;
     use crate::tools::{Registry, ToolResult};
 
     /// Sessão roteirizada: entrega o que o teste mandar no canal e repassa
@@ -1520,6 +1746,8 @@ mod fake {
         pub registry: Registry,
         pub timeouts: ToolTimeouts,
         responses: mpsc::UnboundedSender<Vec<ToolResult>>,
+        /// Juiz e Olho dublês: com eles o motor liga o reflexo.
+        pub reflex: Option<(Arc<dyn Judge>, EyeHandle)>,
     }
 
     impl FakeBackend {
@@ -1531,7 +1759,13 @@ mod fake {
                 registry: Registry::new(),
                 timeouts: ToolTimeouts::default(),
                 responses: mpsc::unbounded_channel().0,
+                reflex: None,
             }
+        }
+
+        pub fn with_reflex(mut self, judge: Arc<dyn Judge>, eye: EyeHandle) -> Self {
+            self.reflex = Some((judge, eye));
+            self
         }
 
         pub fn with_tools(
@@ -1583,6 +1817,7 @@ mod tests {
             mcp_servers: Vec::new(),
             full_access: false,
             always_allow: Vec::new(),
+            reflex: Default::default(),
         }
     }
 
@@ -1749,6 +1984,223 @@ mod tests {
         );
         assert!(handle.last_error().is_none());
 
+        handle.stop().await;
+    }
+
+    /// Olho de teste: não sonda processos.
+    struct NoProbe;
+    impl crate::reflex::eye::RunningProbe for NoProbe {
+        fn running_app_names(&self) -> Vec<String> {
+            vec![]
+        }
+    }
+
+    fn reflex_settings() -> crate::config::ReflexSettings {
+        crate::config::ReflexSettings {
+            enabled: true,
+            api_key: Some("k".into()),
+            debounce_ms: 10,
+            ..Default::default()
+        }
+    }
+
+    #[tokio::test]
+    async fn reflexo_abre_app_antes_do_gemini_e_deduplica_a_chamada_dele() {
+        use crate::reflex::eye::Eye;
+        use crate::reflex::judge::FakeJudge;
+        use crate::reflex::questions::{Answer, Answers};
+        use std::collections::BTreeMap;
+
+        // Tool fake `app.open` que só registra a chamada.
+        #[derive(Clone, Default)]
+        struct SpyOpen(Arc<Mutex<Vec<serde_json::Value>>>);
+        #[async_trait::async_trait]
+        impl crate::tools::Tool for SpyOpen {
+            fn spec(&self) -> ToolSpec {
+                ToolSpec {
+                    name: "app.open".into(),
+                    description: "spy".into(),
+                    parameters: serde_json::json!({"type": "object"}),
+                    risk: Risk::Safe,
+                }
+            }
+            async fn call(&self, args: serde_json::Value) -> Result<serde_json::Value, ToolError> {
+                self.0.lock().unwrap().push(args);
+                Ok(serde_json::json!({"status": "aberto"}))
+            }
+        }
+
+        let dir = std::env::temp_dir().join(format!("engine-reflex-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("Safari.app")).unwrap();
+        let eye = Eye::start_with(
+            vec![dir],
+            vec![],
+            Arc::new(NoProbe),
+            Duration::from_secs(3600),
+            Duration::from_secs(3600),
+        );
+        let judge = Arc::new(FakeJudge::new());
+        let mut answers = Answers::default();
+        for (id, pick) in [("intent", "open_app"), ("app", "Safari")] {
+            let mut p = BTreeMap::new();
+            p.insert(pick.to_string(), 0.96);
+            p.insert("none".to_string(), 0.04);
+            answers.answers.insert(
+                id.into(),
+                Answer::Choice {
+                    choice: pick.into(),
+                    probabilities: p,
+                    confidence: 0.96,
+                },
+            );
+        }
+        judge.push(answers);
+
+        let spy = SpyOpen::default();
+        let (script_tx, script_rx) = mpsc::channel(16);
+        let (_mic_tx, mic_rx) = mpsc::channel(16);
+        let mut fake = fake::FakeBackend::new(script_rx, mic_rx);
+        fake.registry.register(Box::new(spy.clone()));
+        let fake = fake.with_reflex(judge, eye);
+        let mut config = test_config();
+        config.tools = vec!["*".into()];
+        config.reflex = reflex_settings();
+        let handle = start_with(config, Backend::Fake(fake)).await.unwrap();
+        let mut events = handle.events();
+
+        script_tx
+            .send(ServerEvent::UserText("abre o safari".into()))
+            .await
+            .unwrap();
+
+        let acted = loop {
+            match next_non_level(&mut events).await {
+                EngineEvent::ReflexActed { call, .. } => break call,
+                EngineEvent::Error { message, .. } => panic!("{message}"),
+                _ => {}
+            }
+        };
+        assert_eq!(acted.name, "app.open");
+        assert!(acted.id.starts_with(crate::reflex::decide::REFLEX_CALL_PREFIX));
+        // A tool rodou uma vez e o resultado saiu como evento.
+        loop {
+            if let EngineEvent::ToolResult { id, ok, .. } = next_non_level(&mut events).await {
+                if id == acted.id {
+                    assert!(ok);
+                    break;
+                }
+            }
+        }
+        assert_eq!(spy.0.lock().unwrap().len(), 1);
+
+        // O Gemini chama a mesma ação em seguida: deduplicada, a tool NÃO
+        // roda de novo e ele recebe sucesso.
+        script_tx
+            .send(ServerEvent::ToolCall(vec![ToolCall {
+                id: "g1".into(),
+                name: "app.open".into(),
+                args: serde_json::json!({"name": "Safari"}),
+            }]))
+            .await
+            .unwrap();
+        let result = loop {
+            match next_non_level(&mut events).await {
+                EngineEvent::ToolResult { id, ok, .. } if id == "g1" => break ok,
+                _ => {}
+            }
+        };
+        assert!(result);
+        assert_eq!(spy.0.lock().unwrap().len(), 1, "dedup: não executa de novo");
+        handle.stop().await;
+    }
+
+    #[tokio::test]
+    async fn reflexo_aprova_pendente_por_voz() {
+        use crate::reflex::eye::Eye;
+        use crate::reflex::judge::FakeJudge;
+        use crate::reflex::questions::{Answer, Answers};
+
+        // Tool `Confirm` fake que conta execuções.
+        #[derive(Clone, Default)]
+        struct SpyShell(Arc<Mutex<u32>>);
+        #[async_trait::async_trait]
+        impl crate::tools::Tool for SpyShell {
+            fn spec(&self) -> ToolSpec {
+                ToolSpec {
+                    name: "shell.run".into(),
+                    description: "spy".into(),
+                    parameters: serde_json::json!({"type": "object"}),
+                    risk: Risk::Confirm,
+                }
+            }
+            async fn call(&self, _args: serde_json::Value) -> Result<serde_json::Value, ToolError> {
+                *self.0.lock().unwrap() += 1;
+                Ok(serde_json::json!({"status": "ok"}))
+            }
+        }
+
+        let eye = Eye::start_with(
+            vec![],
+            vec![],
+            Arc::new(NoProbe),
+            Duration::from_secs(3600),
+            Duration::from_secs(3600),
+        );
+        let judge = Arc::new(FakeJudge::new());
+        let mut a = Answers::default();
+        a.answers.insert("approve".into(), Answer::Noul { noul: 0.93 });
+        a.answers.insert("deny".into(), Answer::Noul { noul: 0.03 });
+        a.answers.insert("always".into(), Answer::Noul { noul: 0.01 });
+        judge.push(a);
+
+        let spy = SpyShell::default();
+        let (script_tx, script_rx) = mpsc::channel(16);
+        let (_mic_tx, mic_rx) = mpsc::channel(16);
+        let mut fake = fake::FakeBackend::new(script_rx, mic_rx);
+        fake.registry.register(Box::new(spy.clone()));
+        let fake = fake.with_reflex(judge, eye);
+        let mut config = test_config();
+        config.tools = vec!["*".into()];
+        config.reflex = reflex_settings();
+        let handle = start_with(config, Backend::Fake(fake)).await.unwrap();
+        let mut events = handle.events();
+
+        script_tx
+            .send(ServerEvent::ToolCall(vec![ToolCall {
+                id: "c1".into(),
+                name: "shell.run".into(),
+                args: serde_json::json!({"command": "ls"}),
+            }]))
+            .await
+            .unwrap();
+        loop {
+            if let EngineEvent::ToolConfirmNeeded { .. } = next_non_level(&mut events).await {
+                break;
+            }
+        }
+
+        // Frase fora das listas fixas de engine_tools: só o reflexo entende.
+        script_tx
+            .send(ServerEvent::UserText("bora, toca ficha".into()))
+            .await
+            .unwrap();
+        loop {
+            match next_non_level(&mut events).await {
+                EngineEvent::ReflexConfirmed { approve: true, .. } => break,
+                EngineEvent::ToolResult { id, .. } if id == "c1" => {
+                    panic!("resolveu sem o reflexo")
+                }
+                _ => {}
+            }
+        }
+        loop {
+            if let EngineEvent::ToolResult { id, ok: true, .. } = next_non_level(&mut events).await {
+                if id == "c1" {
+                    break;
+                }
+            }
+        }
+        assert_eq!(*spy.0.lock().unwrap(), 1);
         handle.stop().await;
     }
 

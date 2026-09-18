@@ -23,6 +23,9 @@ pub const EXEC_TIMEOUT: Duration = Duration::from_secs(30);
 /// Uma ação `Confirm` idêntica (mesmo nome e argumentos) pedida de novo logo
 /// depois de aprovada não executa outra vez.
 pub const REPEAT_WINDOW: Duration = Duration::from_secs(30);
+/// Ação feita pelo reflexo: uma chamada igual do modelo dentro desta janela
+/// recebe sucesso sem executar de novo.
+pub const REFLEX_DONE_WINDOW: Duration = Duration::from_secs(8);
 /// Tamanho máximo dos resumos de eventos (overlay, terminal).
 const SUMMARY_MAX: usize = 160;
 
@@ -218,6 +221,17 @@ fn is_secret_key(key: &str) -> bool {
     .any(|needle| key.contains(needle))
 }
 
+/// Texto de contexto enviado ao modelo quando o reflexo agiu, para ele não
+/// repetir a ação nem narrar como futuro.
+pub fn reflex_context_text(call: &ToolCall) -> String {
+    format!(
+        "[sistema] já executado agora pelo reflexo: {} ({}). Não chame de novo; \
+         se for comentar, fale no passado e seja breve.",
+        call.name,
+        call_summary(call)
+    )
+}
+
 /// Resumo de um resultado: a mensagem de erro, ou o começo da saída.
 pub fn result_summary(output: &Value, error: Option<&str>) -> String {
     if let Some(error) = error {
@@ -331,6 +345,19 @@ mod tests {
             SUMMARY_MAX
         );
         assert_eq!(result_summary(&Value::Null, Some("negado")), "negado");
+    }
+
+    #[test]
+    fn reflex_context_names_the_action_in_the_past() {
+        let call = ToolCall {
+            id: "reflex-1".into(),
+            name: "app.open".into(),
+            args: json!({"name": "Safari"}),
+        };
+        let text = reflex_context_text(&call);
+        assert!(text.starts_with("[sistema] já executado agora pelo reflexo: app.open (app.open: Safari)"), "{text}");
+        assert!(text.contains("Não chame de novo"));
+        assert_eq!(REFLEX_DONE_WINDOW, Duration::from_secs(8));
     }
 
     #[test]
