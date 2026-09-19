@@ -1,0 +1,169 @@
+⚠ acesso total ligado: o Jarvis executa comandos e mexe em arquivos sem perguntar
+2026-09-19T02:57:29.482140Z  INFO openjarvisbr_core::mcp: MCP conectado server=overclock tools=12
+2026-09-19T02:57:32.302733Z  INFO openjarvisbr_core::mcp: MCP conectado server=overclick tools=34
+2026-09-19T02:57:32.348203Z  INFO openjarvisbr_core::mcp: MCP conectado server=observer tools=3
+2026-09-19T02:57:32.348650Z  INFO openjarvisbr_core::engine: conectando à Live API ferramentas=63
+2026-09-19T02:57:32.348860Z  INFO openjarvisbr_core::live::session: conectando na Live API host="***#61ff97e6"
+2026-09-19T02:57:33.290053Z DEBUG openjarvisbr_core::live::session: setupComplete recebido host="***#61ff97e6"
+2026-09-19T02:57:33.469020Z  INFO openjarvisbr_core::engine: reflexo ligado
+2026-09-19T02:57:33.469454Z DEBUG openjarvisbr_core::engine: usuário disse texto=abre o Safari via="texto"
+2026-09-19T02:57:33.469478Z DEBUG openjarvisbr_core::live::session: texto de contexto enviado tamanho=13
+2026-09-19T02:57:34.115038Z  INFO openjarvisbr_core::engine: tool pedida pelo modelo id=call_373855 ferramenta=app.open risco=Safe pedido=app.open: Safari
+2026-09-19T02:57:34.131388Z DEBUG openjarvisbr_core::engine: turno do modelo concluído
+2026-09-19T02:57:34.168326Z  INFO openjarvisbr_core::engine: tool concluída id=call_373855 ferramenta=app.open origem="modelo" ms=53 resultado={"opened":"Safari"}
+2026-09-19T02:57:34.168494Z  INFO openjarvisbr_core::engine: reflexo aprendeu a ação ferramenta=app.open frase="abre o Safari"
+2026-09-19T02:57:34.168580Z DEBUG openjarvisbr_core::live::session: resposta de ferramenta enviada quantidade=1
+2026-09-19T02:57:34.184043Z DEBUG openjarvisbr_core::reflex: reflexo decision=Act(ToolCall { id: "reflex-1", name: "app.open", args: Object {"name": String("Safari")} }) latency_ms=592 skipped_judge=false fala="abre o Safari"
+2026-09-19T02:57:34.184054Z  INFO openjarvisbr_core::reflex: resumo do reflexo na sessão total=1 act=1 nothing=0 skipped_judge=0 retries=0 unavailable=0 average_latency_ms=592
+2026-09-19T02:57:34.184087Z  INFO openjarvisbr_core::engine: modelo já pediu esta ação; reflexo não repete ferramenta=app.open ms=592
+2026-09-19T02:57:34.803604Z DEBUG openjarvisbr_core::engine: modelo disse texto=O Safari foi 
+2026-09-19T02:57:35.155046Z DEBUG openjarvisbr_core::engine: modelo disse texto=aberto com sucesso.
+2026-09-19T02:57:37.000226Z DEBUG openjarvisbr_core::engine: turno do modelo concluído
+2026-09-19T02:57:39.924161Z DEBUG openjarvisbr_core::engine: usuário disse texto=abre o ***#d4c9d902 no Safari via="texto"
+2026-09-19T02:57:39.924267Z DEBUG openjarvisbr_core::live::session: texto de contexto enviado tamanho=27
+2026-09-19T02:57:40.543356Z  INFO openjarvisbr_core::engine: tool pedida pelo modelo id=call_373957 ferramenta=browser.goto risco=Safe pedido=browser.goto: browser=Safari, url=***#05046f26
+2026-09-19T02:57:40.559705Z DEBUG openjarvisbr_core::engine: turno do modelo concluído
+2026-09-19T02:57:40.687523Z DEBUG openjarvisbr_core::reflex: reflexo decision=Nothing latency_ms=641 skipped_judge=false fala="abre o ***#d4c9d902 no Safari"
+2026-09-19T02:57:40.687535Z  INFO openjarvisbr_core::reflex: resumo do reflexo na sessão total=2 act=1 nothing=1 skipped_judge=0 retries=0 unavailable=0 average_latency_ms=616
+2026-09-19T02:57:40.746323Z  INFO openjarvisbr_core::engine: tool concluída id=call_373957 ferramenta=browser.goto origem="modelo" ms=202 resultado={"action":"goto","browser":"Safari"}
+2026-09-19T02:57:40.746621Z  INFO openjarvisbr_core::engine: reflexo aprendeu a ação ferramenta=browser.goto frase="abre o ***#d4c9d902 no Safari"
+2026-09-19T02:57:40.746729Z DEBUG openjarvisbr_core::live::session: resposta de ferramenta enviada quantidade=1
+2026-09-19T02:57:41.292361Z  INFO openjarvisbr_core::engine: modelo repetiu a mesma chamada nesta fala; não executa de novo ferramenta=browser.goto
+2026-09-19T02:57:41.292479Z DEBUG openjarvisbr_core::live::session: resposta de ferramenta enviada quantidade=1
+2026-09-19T02:57:41.310005Z DEBUG openjarvisbr_core::engine: turno do modelo concluído
+2026-09-19T02:57:42.127325Z DEBUG openjarvisbr_core::engine: modelo disse texto=O Google já está 
+2026-09-19T02:57:42.405660Z DEBUG openjarvisbr_core::engine: modelo disse texto=aberto no Safari.
+2026-09-19T02:57:44.472298Z DEBUG openjarvisbr_core::engine: turno do modelo concluído
+2026-09-19T02:57:47.376905Z DEBUG openjarvisbr_core::engine: usuário disse texto=abre o Chrome via="texto"
+2026-09-19T02:57:47.376986Z DEBUG openjarvisbr_core::live::session: texto de contexto enviado tamanho=13
+2026-09-19T02:57:47.824816Z DEBUG openjarvisbr_core::reflex: reflexo decision=Act(ToolCall { id: "reflex-2", name: "app.open", args: Object {"name": String("Google Chrome")} }) latency_ms=325 skipped_judge=false fala="abre o Chrome"
+2026-09-19T02:57:47.824828Z  INFO openjarvisbr_core::reflex: resumo do reflexo na sessão total=3 act=2 nothing=1 skipped_judge=0 retries=0 unavailable=0 average_latency_ms=519
+2026-09-19T02:57:47.824856Z  INFO openjarvisbr_core::engine: reflexo agiu ferramenta=app.open ms=325
+2026-09-19T02:57:47.824905Z DEBUG openjarvisbr_core::live::session: texto de contexto enviado tamanho=146
+2026-09-19T02:57:47.884366Z  INFO openjarvisbr_core::engine: já executada pelo reflexo; não repete ferramenta=app.open
+2026-09-19T02:57:47.884444Z DEBUG openjarvisbr_core::live::session: resposta de ferramenta enviada quantidade=1
+2026-09-19T02:57:47.902429Z DEBUG openjarvisbr_core::engine: turno do modelo concluído
+2026-09-19T02:57:48.604722Z DEBUG openjarvisbr_core::engine: modelo disse texto=O Google Chrome 
+2026-09-19T02:57:48.881660Z DEBUG openjarvisbr_core::engine: modelo disse texto=foi aberto.
+2026-09-19T02:57:50.632195Z DEBUG openjarvisbr_core::engine: turno do modelo concluído
+2026-09-19T02:57:51.340680Z DEBUG openjarvisbr_core::engine: modelo disse texto=O Google Chrome 
+2026-09-19T02:57:51.626333Z DEBUG openjarvisbr_core::engine: modelo disse texto=foi aberto.
+2026-09-19T02:57:51.626352Z  WARN openjarvisbr_core::engine: modelo repetiu a fala anterior; descartada fala=O Google Chrome foi aberto.
+2026-09-19T02:57:53.331347Z DEBUG openjarvisbr_core::engine: turno do modelo concluído
+2026-09-19T02:57:57.398998Z  INFO openjarvisbr_core::engine: tool concluída id=reflex-2 ferramenta=app.open origem="reflexo" ms=9574 resultado={"opened":"Google Chrome"}
+2026-09-19T02:58:00.302279Z DEBUG openjarvisbr_core::engine: usuário disse texto=abre o youtube no Chrome via="texto"
+2026-09-19T02:58:00.302345Z DEBUG openjarvisbr_core::live::session: texto de contexto enviado tamanho=24
+2026-09-19T02:58:00.714254Z DEBUG openjarvisbr_core::reflex: reflexo decision=Nothing latency_ms=291 skipped_judge=false fala="abre o youtube no Chrome"
+2026-09-19T02:58:00.714266Z  INFO openjarvisbr_core::reflex: resumo do reflexo na sessão total=4 act=2 nothing=2 skipped_judge=0 retries=0 unavailable=0 average_latency_ms=462
+2026-09-19T02:58:00.855329Z  INFO openjarvisbr_core::engine: tool pedida pelo modelo id=call_374257 ferramenta=browser.goto risco=Safe pedido=browser.goto: browser=Chrome, url=***#1467931a
+2026-09-19T02:58:00.874185Z DEBUG openjarvisbr_core::engine: turno do modelo concluído
+2026-09-19T02:58:01.012837Z  INFO openjarvisbr_core::engine: tool concluída id=call_374257 ferramenta=browser.goto origem="modelo" ms=157 resultado={"action":"goto","browser":"Google Chrome"}
+2026-09-19T02:58:01.013079Z  INFO openjarvisbr_core::engine: reflexo aprendeu a ação ferramenta=browser.goto frase="abre o youtube no Chrome"
+2026-09-19T02:58:01.013132Z DEBUG openjarvisbr_core::live::session: resposta de ferramenta enviada quantidade=1
+2026-09-19T02:58:01.635977Z  INFO openjarvisbr_core::engine: modelo repetiu a mesma chamada nesta fala; não executa de novo ferramenta=browser.goto
+2026-09-19T02:58:01.636023Z DEBUG openjarvisbr_core::live::session: resposta de ferramenta enviada quantidade=1
+2026-09-19T02:58:01.652917Z DEBUG openjarvisbr_core::engine: turno do modelo concluído
+2026-09-19T02:58:02.350952Z DEBUG openjarvisbr_core::engine: modelo disse texto=O YouTube foi 
+2026-09-19T02:58:02.696891Z DEBUG openjarvisbr_core::engine: modelo disse texto=aberto no Chrome.
+2026-09-19T02:58:04.469318Z DEBUG openjarvisbr_core::engine: turno do modelo concluído
+2026-09-19T02:58:07.422666Z DEBUG openjarvisbr_core::engine: usuário disse texto=volta via="texto"
+2026-09-19T02:58:07.422764Z DEBUG openjarvisbr_core::live::session: texto de contexto enviado tamanho=5
+2026-09-19T02:58:07.938280Z DEBUG openjarvisbr_core::reflex: reflexo decision=Act(ToolCall { id: "reflex-3", name: "browser.back", args: Object {} }) latency_ms=393 skipped_judge=false fala="volta"
+2026-09-19T02:58:07.938294Z  INFO openjarvisbr_core::reflex: resumo do reflexo na sessão total=5 act=3 nothing=2 skipped_judge=0 retries=0 unavailable=0 average_latency_ms=448
+2026-09-19T02:58:07.938346Z  INFO openjarvisbr_core::engine: reflexo agiu ferramenta=browser.back ms=393
+2026-09-19T02:58:07.938451Z DEBUG openjarvisbr_core::live::session: texto de contexto enviado tamanho=139
+2026-09-19T02:58:08.260133Z  INFO openjarvisbr_core::engine: tool concluída id=reflex-3 ferramenta=browser.back origem="reflexo" ms=321 resultado={"action":"back","browser":"Google Chrome"}
+2026-09-19T02:58:08.896683Z DEBUG openjarvisbr_core::engine: modelo disse texto=A página anterior 
+2026-09-19T02:58:09.172133Z DEBUG openjarvisbr_core::engine: modelo disse texto=foi acessada.
+2026-09-19T02:58:11.155044Z DEBUG openjarvisbr_core::engine: turno do modelo concluído
+2026-09-19T02:58:12.122153Z DEBUG openjarvisbr_core::engine: usuário disse texto=pesquisa overclock via="texto"
+2026-09-19T02:58:12.122236Z DEBUG openjarvisbr_core::live::session: texto de contexto enviado tamanho=18
+2026-09-19T02:58:12.871154Z  INFO openjarvisbr_core::engine: tool pedida pelo modelo id=call_374400 ferramenta=browser.search risco=Safe pedido=browser.search: overclock
+2026-09-19T02:58:12.888418Z DEBUG openjarvisbr_core::engine: turno do modelo concluído
+2026-09-19T02:58:12.973472Z DEBUG openjarvisbr_core::reflex: reflexo decision=Act(ToolCall { id: "reflex-4", name: "browser.search", args: Object {"query": String("overclock")} }) latency_ms=729 skipped_judge=false fala="pesquisa overclock"
+2026-09-19T02:58:12.973490Z  INFO openjarvisbr_core::reflex: resumo do reflexo na sessão total=6 act=4 nothing=2 skipped_judge=0 retries=0 unavailable=0 average_latency_ms=495
+2026-09-19T02:58:12.973545Z  INFO openjarvisbr_core::engine: modelo já pediu esta ação; reflexo não repete ferramenta=browser.search ms=729
+2026-09-19T02:58:13.162829Z  INFO openjarvisbr_core::engine: tool concluída id=call_374400 ferramenta=browser.search origem="modelo" ms=291 resultado={"action":"search","browser":"Google Chrome"}
+2026-09-19T02:58:13.163028Z  INFO openjarvisbr_core::engine: reflexo aprendeu a ação ferramenta=browser.search frase="pesquisa overclock"
+2026-09-19T02:58:13.163134Z DEBUG openjarvisbr_core::live::session: resposta de ferramenta enviada quantidade=1
+2026-09-19T02:58:13.785757Z  INFO openjarvisbr_core::engine: modelo repetiu a mesma chamada nesta fala; não executa de novo ferramenta=browser.search
+2026-09-19T02:58:13.785809Z DEBUG openjarvisbr_core::live::session: resposta de ferramenta enviada quantidade=1
+2026-09-19T02:58:13.805480Z DEBUG openjarvisbr_core::engine: turno do modelo concluído
+2026-09-19T02:58:14.707541Z DEBUG openjarvisbr_core::engine: usuário disse texto=abre a Calculadora via="texto"
+2026-09-19T02:58:14.707609Z DEBUG openjarvisbr_core::live::session: texto de contexto enviado tamanho=18
+2026-09-19T02:58:14.788170Z DEBUG openjarvisbr_core::engine: modelo disse texto=A pesquisa por 
+2026-09-19T02:58:14.916587Z DEBUG openjarvisbr_core::engine: turno do modelo concluído
+2026-09-19T02:58:15.130263Z DEBUG openjarvisbr_core::reflex: reflexo decision=Nothing latency_ms=300 skipped_judge=false fala="abre a Calculadora"
+2026-09-19T02:58:15.130276Z  INFO openjarvisbr_core::reflex: resumo do reflexo na sessão total=7 act=4 nothing=3 skipped_judge=0 retries=0 unavailable=0 average_latency_ms=467
+2026-09-19T02:58:15.402238Z  INFO openjarvisbr_core::engine: tool pedida pelo modelo id=call_374440 ferramenta=app.open risco=Safe pedido=app.open: Calculator
+2026-09-19T02:58:15.422492Z DEBUG openjarvisbr_core::engine: turno do modelo concluído
+2026-09-19T02:58:15.445191Z  INFO openjarvisbr_core::engine: tool concluída id=call_374440 ferramenta=app.open origem="modelo" ms=42 resultado={"opened":"Calculator"}
+2026-09-19T02:58:15.445340Z  INFO openjarvisbr_core::engine: reflexo aprendeu a ação ferramenta=app.open frase="abre a Calculadora"
+2026-09-19T02:58:15.445402Z DEBUG openjarvisbr_core::live::session: resposta de ferramenta enviada quantidade=1
+2026-09-19T02:58:16.274339Z DEBUG openjarvisbr_core::engine: modelo disse texto=A calculadora 
+2026-09-19T02:58:16.492412Z DEBUG openjarvisbr_core::engine: modelo disse texto=está aberta.
+2026-09-19T02:58:18.117595Z DEBUG openjarvisbr_core::engine: turno do modelo concluído
+2026-09-19T02:58:19.020654Z DEBUG openjarvisbr_core::engine: usuário disse texto=abre a globo via="texto"
+2026-09-19T02:58:19.020719Z DEBUG openjarvisbr_core::live::session: texto de contexto enviado tamanho=12
+2026-09-19T02:58:19.424079Z DEBUG openjarvisbr_core::reflex: reflexo decision=Nothing latency_ms=282 skipped_judge=false fala="abre a globo"
+2026-09-19T02:58:19.424093Z  INFO openjarvisbr_core::reflex: resumo do reflexo na sessão total=8 act=4 nothing=4 skipped_judge=0 retries=0 unavailable=0 average_latency_ms=444
+2026-09-19T02:58:19.827043Z  INFO openjarvisbr_core::engine: tool pedida pelo modelo id=call_374492 ferramenta=web.open risco=Safe pedido=web.open: ***#f33bcabf
+2026-09-19T02:58:19.844994Z DEBUG openjarvisbr_core::engine: turno do modelo concluído
+2026-09-19T02:58:19.877188Z  INFO openjarvisbr_core::engine: tool concluída id=call_374492 ferramenta=web.open origem="modelo" ms=50 resultado={"opened":"***#f33bcabf"}
+2026-09-19T02:58:19.877354Z  INFO openjarvisbr_core::engine: reflexo aprendeu a ação ferramenta=web.open frase="abre a globo"
+2026-09-19T02:58:19.877400Z DEBUG openjarvisbr_core::live::session: resposta de ferramenta enviada quantidade=1
+2026-09-19T02:58:20.509677Z  INFO openjarvisbr_core::engine: modelo repetiu a mesma chamada nesta fala; não executa de novo ferramenta=web.open
+2026-09-19T02:58:20.509776Z DEBUG openjarvisbr_core::live::session: resposta de ferramenta enviada quantidade=1
+2026-09-19T02:58:20.526776Z DEBUG openjarvisbr_core::engine: turno do modelo concluído
+2026-09-19T02:58:21.240550Z DEBUG openjarvisbr_core::engine: modelo disse texto=A Globo está 
+2026-09-19T02:58:21.500759Z DEBUG openjarvisbr_core::engine: modelo disse texto=aberta no navegador.
+2026-09-19T02:58:23.580174Z DEBUG openjarvisbr_core::engine: turno do modelo concluído
+2026-09-19T02:58:26.522288Z DEBUG openjarvisbr_core::engine: usuário disse texto=abre a globo via="texto"
+2026-09-19T02:58:26.522352Z DEBUG openjarvisbr_core::live::session: texto de contexto enviado tamanho=12
+2026-09-19T02:58:26.951147Z DEBUG openjarvisbr_core::reflex: reflexo decision=Nothing latency_ms=307 skipped_judge=false fala="abre a globo"
+2026-09-19T02:58:26.951157Z  INFO openjarvisbr_core::reflex: resumo do reflexo na sessão total=9 act=4 nothing=5 skipped_judge=0 retries=0 unavailable=0 average_latency_ms=428
+2026-09-19T02:58:27.336863Z  INFO openjarvisbr_core::engine: tool pedida pelo modelo id=call_374575 ferramenta=web.open risco=Safe pedido=web.open: ***#f33bcabf
+2026-09-19T02:58:27.354002Z DEBUG openjarvisbr_core::engine: turno do modelo concluído
+2026-09-19T02:58:27.381821Z  INFO openjarvisbr_core::engine: tool concluída id=call_374575 ferramenta=web.open origem="modelo" ms=44 resultado={"opened":"***#f33bcabf"}
+2026-09-19T02:58:27.382030Z  INFO openjarvisbr_core::engine: reflexo aprendeu a ação ferramenta=web.open frase="abre a globo"
+2026-09-19T02:58:27.382117Z DEBUG openjarvisbr_core::live::session: resposta de ferramenta enviada quantidade=1
+2026-09-19T02:58:28.627264Z DEBUG openjarvisbr_core::engine: modelo disse texto=A Globo está 
+2026-09-19T02:58:28.910751Z DEBUG openjarvisbr_core::engine: modelo disse texto=aberta no navegador.
+2026-09-19T02:58:28.910765Z  WARN openjarvisbr_core::engine: modelo repetiu a fala anterior; descartada fala=A Globo está aberta no navegador.
+2026-09-19T02:58:30.983160Z DEBUG openjarvisbr_core::engine: turno do modelo concluído
+2026-09-19T02:58:31.884948Z DEBUG openjarvisbr_core::engine: usuário disse texto=diminui o som via="texto"
+2026-09-19T02:58:31.885036Z DEBUG openjarvisbr_core::live::session: texto de contexto enviado tamanho=13
+2026-09-19T02:58:32.308247Z DEBUG openjarvisbr_core::reflex: reflexo decision=Act(ToolCall { id: "reflex-5", name: "sys.volume", args: Object {"action": String("down")} }) latency_ms=301 skipped_judge=false fala="diminui o som"
+2026-09-19T02:58:32.308259Z  INFO openjarvisbr_core::reflex: resumo do reflexo na sessão total=10 act=5 nothing=5 skipped_judge=0 retries=0 unavailable=0 average_latency_ms=416
+2026-09-19T02:58:32.308288Z  INFO openjarvisbr_core::engine: reflexo agiu ferramenta=sys.volume ms=301
+2026-09-19T02:58:32.308354Z DEBUG openjarvisbr_core::live::session: texto de contexto enviado tamanho=141
+2026-09-19T02:58:32.638931Z  INFO openjarvisbr_core::engine: tool concluída id=reflex-5 ferramenta=sys.volume origem="reflexo" ms=330 resultado={"level":20,"muted":false}
+2026-09-19T02:58:33.046388Z DEBUG openjarvisbr_core::engine: modelo disse texto=O volume 
+2026-09-19T02:58:33.323864Z DEBUG openjarvisbr_core::engine: modelo disse texto=foi diminuído.
+2026-09-19T02:58:34.973492Z DEBUG openjarvisbr_core::engine: turno do modelo concluído
+2026-09-19T02:58:35.919690Z DEBUG openjarvisbr_core::engine: usuário disse texto=coloca o volume em 30 via="texto"
+2026-09-19T02:58:35.919775Z DEBUG openjarvisbr_core::live::session: texto de contexto enviado tamanho=21
+2026-09-19T02:58:36.382429Z DEBUG openjarvisbr_core::reflex: reflexo decision=Act(ToolCall { id: "reflex-6", name: "sys.volume", args: Object {"action": String("set"), "level": Number(30)} }) latency_ms=340 skipped_judge=false fala="coloca o volume em 30"
+2026-09-19T02:58:36.382442Z  INFO openjarvisbr_core::reflex: resumo do reflexo na sessão total=11 act=6 nothing=5 skipped_judge=0 retries=0 unavailable=0 average_latency_ms=409
+2026-09-19T02:58:36.382494Z  INFO openjarvisbr_core::engine: reflexo agiu ferramenta=sys.volume ms=340
+2026-09-19T02:58:36.382574Z DEBUG openjarvisbr_core::live::session: texto de contexto enviado tamanho=157
+2026-09-19T02:58:36.481431Z  INFO openjarvisbr_core::engine: já executada pelo reflexo; não repete ferramenta=sys.volume
+2026-09-19T02:58:36.481508Z DEBUG openjarvisbr_core::live::session: resposta de ferramenta enviada quantidade=1
+2026-09-19T02:58:36.497295Z DEBUG openjarvisbr_core::engine: turno do modelo concluído
+2026-09-19T02:58:36.560630Z  INFO openjarvisbr_core::engine: tool concluída id=reflex-6 ferramenta=sys.volume origem="reflexo" ms=178 resultado={"level":30}
+2026-09-19T02:58:37.233993Z DEBUG openjarvisbr_core::engine: modelo disse texto=O volume foi 
+2026-09-19T02:58:37.514140Z DEBUG openjarvisbr_core::engine: modelo disse texto=definido para 30.
+2026-09-19T02:58:39.709557Z DEBUG openjarvisbr_core::engine: turno do modelo concluído
+2026-09-19T02:58:40.334105Z DEBUG openjarvisbr_core::engine: modelo disse texto=O volume foi 
+2026-09-19T02:58:40.657314Z DEBUG openjarvisbr_core::engine: modelo disse texto=definido para 30.
+2026-09-19T02:58:40.657328Z  WARN openjarvisbr_core::engine: modelo repetiu a fala anterior; descartada fala=O volume foi definido para 30.
+2026-09-19T02:58:42.940829Z DEBUG openjarvisbr_core::engine: turno do modelo concluído
+2026-09-19T02:58:43.842919Z DEBUG openjarvisbr_core::engine: usuário disse texto=que horas são? via="texto"
+2026-09-19T02:58:43.842983Z DEBUG openjarvisbr_core::live::session: texto de contexto enviado tamanho=15
+2026-09-19T02:58:43.963510Z DEBUG openjarvisbr_core::reflex: reflexo decision=Nothing latency_ms=0 skipped_judge=true fala="que horas são?"
+2026-09-19T02:58:43.963522Z  INFO openjarvisbr_core::reflex: resumo do reflexo na sessão total=12 act=6 nothing=6 skipped_judge=1 retries=0 unavailable=0 average_latency_ms=375
+2026-09-19T02:58:45.026662Z DEBUG openjarvisbr_core::engine: modelo disse texto=São duas horas 
+2026-09-19T02:58:45.235718Z DEBUG openjarvisbr_core::engine: modelo disse texto=e cinquenta
+2026-09-19T02:58:45.553219Z DEBUG openjarvisbr_core::engine: modelo disse texto= e oito minutos.
+2026-09-19T02:58:48.154766Z DEBUG openjarvisbr_core::engine: turno do modelo concluído
+2026-09-19T02:58:49.068497Z  INFO openjarvisbr_core::engine: encerrando o motor

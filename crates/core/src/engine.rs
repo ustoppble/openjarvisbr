@@ -669,10 +669,12 @@ struct Worker {
     /// fala nova começa; vale `REFLEX_DONE_WINDOW`). O reflexo não repete o
     /// que o modelo já pediu, e o modelo não repete a si mesmo.
     model_calls: Vec<(ToolCall, Instant)>,
-    /// Falas do usuário desde o último turno concluído do modelo. Uma chamada
-    /// só aprende a frase quando é exatamente 1: com 2+ a chamada pode ser
-    /// resposta atrasada à fala anterior (JRV-97), e na dúvida não aprende.
-    utterances_since_turn: u32,
+    /// Falas novas ainda não atribuídas à primeira saída do modelo. Com 2+
+    /// não há associação inequívoca para aprender (JRV-97).
+    pending_utterances: u32,
+    /// Pedido que originou a resposta atual, inclusive os turnos abertos
+    /// pelos resultados de tools. Só muda na saída após uma fala nova.
+    attributed_phrase: Option<String>,
 }
 
 impl Worker {
@@ -786,7 +788,8 @@ impl Worker {
             recently_done: Vec::new(),
             pending_learn: HashMap::new(),
             model_calls: Vec::new(),
-            utterances_since_turn: 0,
+            pending_utterances: 0,
+            attributed_phrase: None,
             registry,
             tool_specs,
             policy: Policy::with_full_access(full_access.clone()),
@@ -950,6 +953,7 @@ impl Worker {
             }
             Some(ServerEvent::UserText(text)) => self.on_user_text(text, "voz"),
             Some(ServerEvent::ModelText(text)) => {
+                self.attribute_user_phrase();
                 debug!(texto = %text, "modelo disse");
                 if let Some(r) = self.recorder.as_mut() {
                     r.event("model_text", &text);
@@ -1108,7 +1112,7 @@ impl Worker {
             // exceto o que é recente demais para não ser repetição atrasada.
             let grace = self.timeouts.late_dup_grace;
             self.model_calls.retain(|(_, at)| at.elapsed() < grace);
-            self.utterances_since_turn = self.utterances_since_turn.saturating_add(1);
+            self.pending_utterances = self.pending_utterances.saturating_add(1);
         }
         self.user_heard.push_str(&text);
         if let Some(reflex) = &self.reflex {
@@ -1139,8 +1143,19 @@ impl Worker {
         })
     }
 
+    /// A primeira saída do modelo consome as falas pendentes. TurnComplete
+    /// também chega entre tools do mesmo pedido e não encerra a atribuição.
+    fn attribute_user_phrase(&mut self) {
+        if self.pending_utterances > 0 {
+            self.attributed_phrase = (self.pending_utterances == 1)
+                .then(|| self.user_heard.clone());
+            self.pending_utterances = 0;
+        }
+    }
+
     /// Aplica a política: `Safe` executa já; `Confirm` segura e pergunta.
     fn on_tool_call(&mut self, call: ToolCall) {
+        self.attribute_user_phrase();
         let summary = engine_tools::call_summary(&call);
         let Some(spec) = self.registry.get(&call.name).map(|tool| tool.spec()) else {
             // Fora da allow-list do perfil (ou inexistente): recusa na hora.
@@ -1179,7 +1194,7 @@ impl Worker {
         // O próprio modelo repetiu a chamada nesta fala (JRV-92): recebe
         // sucesso sem executar de novo. Só dentro de um pedido do usuário:
         // sem fala corrente (ex.: política mudou e o modelo refaz), não vale.
-        if self.utterances_since_turn >= 1 && self.model_already_called(&call) {
+        if self.attributed_phrase.is_some() && self.model_already_called(&call) {
             info!(ferramenta = %call.name, "modelo repetiu a mesma chamada nesta fala; não executa de novo");
             if let Some(r) = self.recorder.as_mut() {
                 r.event("tool_dedup_model", format!("{} (modelo)", summary));
@@ -1196,12 +1211,11 @@ impl Worker {
             self.respond(&call.name, ToolResult::ok(&call.id, output));
             return;
         }
-        if self.utterances_since_turn == 1 {
-            self.pending_learn
-                .insert(call.id.clone(), self.user_heard.clone());
+        if let Some(phrase) = &self.attributed_phrase {
+            self.pending_learn.insert(call.id.clone(), phrase.clone());
         } else {
             debug!(
-                ferramenta = %call.name, falas = self.utterances_since_turn,
+                ferramenta = %call.name,
                 "frase ambígua para a chamada; não aprende"
             );
         }
@@ -1429,7 +1443,6 @@ impl Worker {
     fn end_model_turn(&mut self) {
         let turn = std::mem::take(&mut self.model_turn);
         self.user_heard.clear();
-        self.utterances_since_turn = 0;
         if !self.turn_repeated
             && engine_tools::is_repeat(&turn, &self.previous_model_turn)
         {
@@ -1719,6 +1732,8 @@ impl Worker {
         self.model_turn.clear();
         self.turn_repeated = false;
         self.user_heard.clear();
+        self.pending_utterances = 0;
+        self.attributed_phrase = None;
         self.recently_done.clear();
         self.pending_learn.clear();
         if let Some(reflex) = &self.reflex {
@@ -2780,6 +2795,78 @@ mod tests {
             .unwrap();
         assert!(wait_tool_result(&mut events, "g3").await.0);
         assert_eq!(spy.count(), 2, "fala nova não é dedup");
+        handle.stop().await;
+    }
+
+    /// JRV-107: a resposta de uma tool inicia outro turno do modelo, mas
+    /// continua pertencendo ao mesmo pedido do usuário.
+    #[tokio::test]
+    async fn modelo_nao_repete_tool_apos_turn_complete_sem_fala_nova() {
+        use crate::reflex::judge::FakeJudge;
+
+        let eye = empty_eye();
+        let spy = SpyTool::new("app.open", Risk::Safe);
+        let (handle, mut events, script_tx) =
+            start_reflex_engine(&spy, Arc::new(FakeJudge::new()), eye.clone()).await;
+        let call = ToolCall {
+            id: "g1".into(), name: "app.open".into(),
+            args: serde_json::json!({"name": "Calculator"}),
+        };
+        script_tx.send(ServerEvent::UserText("abre a calculadora".into())).await.unwrap();
+        script_tx.send(ServerEvent::ToolCall(vec![call.clone()])).await.unwrap();
+        assert!(wait_tool_result(&mut events, "g1").await.0);
+        script_tx.send(ServerEvent::TurnComplete).await.unwrap();
+        script_tx.send(ServerEvent::ToolCall(vec![ToolCall { id: "g2".into(), ..call }])).await.unwrap();
+        let (ok, summary) = wait_tool_result(&mut events, "g2").await;
+        assert!(ok);
+        assert_eq!(spy.count(), 1, "TurnComplete reabilitou uma ação já executada");
+        assert!(summary.contains("já executada"));
+        let learned = eye.snapshot().learned.clone();
+        assert_eq!(learned.len(), 1);
+        assert_eq!(learned[0].phrase, "abre a calculadora");
+        assert_eq!(learned[0].count, 1);
+        handle.stop().await;
+    }
+
+    #[tokio::test]
+    async fn texto_do_modelo_preserva_atribuicao_para_tool_no_turno_seguinte() {
+        use crate::reflex::judge::FakeJudge;
+
+        let eye = empty_eye();
+        let spy = SpyTool::new("app.open", Risk::Safe);
+        let (handle, mut events, script_tx) =
+            start_reflex_engine(&spy, Arc::new(FakeJudge::new()), eye.clone()).await;
+        script_tx.send(ServerEvent::UserText("abre a calculadora".into())).await.unwrap();
+        script_tx.send(ServerEvent::ModelText("Vou abrir.".into())).await.unwrap();
+        script_tx.send(ServerEvent::TurnComplete).await.unwrap();
+        script_tx.send(ServerEvent::ToolCall(vec![ToolCall {
+            id: "g1".into(), name: "app.open".into(),
+            args: serde_json::json!({"name": "Calculator"}),
+        }])).await.unwrap();
+        assert!(wait_tool_result(&mut events, "g1").await.0);
+        let learned = eye.snapshot().learned.clone();
+        assert_eq!(learned.len(), 1, "perdeu a frase atribuída na primeira saída do modelo");
+        assert_eq!(learned[0].phrase, "abre a calculadora");
+        handle.stop().await;
+    }
+
+    #[tokio::test]
+    async fn duas_falas_antes_da_saida_do_modelo_nao_atribuem_aprendizado() {
+        use crate::reflex::judge::FakeJudge;
+
+        let eye = empty_eye();
+        let spy = SpyTool::new("app.open", Risk::Safe);
+        let (handle, mut events, script_tx) =
+            start_reflex_engine(&spy, Arc::new(FakeJudge::new()), eye.clone()).await;
+        script_tx.send(ServerEvent::UserText("abre a calculadora".into())).await.unwrap();
+        script_tx.send(ServerEvent::TurnComplete).await.unwrap();
+        script_tx.send(ServerEvent::UserText("abre o safari".into())).await.unwrap();
+        script_tx.send(ServerEvent::ToolCall(vec![ToolCall {
+            id: "g1".into(), name: "app.open".into(),
+            args: serde_json::json!({"name": "Calculator"}),
+        }])).await.unwrap();
+        assert!(wait_tool_result(&mut events, "g1").await.0);
+        assert!(eye.snapshot().learned.is_empty(), "aprendeu uma associação ambígua");
         handle.stop().await;
     }
 
