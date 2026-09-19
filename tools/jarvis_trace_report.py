@@ -22,7 +22,7 @@ from dataclasses import dataclass, field
 
 ANSI = re.compile(r"\x1b\[[0-9;]*m")
 LINE = re.compile(
-    r"^(?P<ts>\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+)Z\s+"
+    r"(?P<ts>\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+)Z\s+"
     r"(?P<level>[A-Z]+)\s+(?P<target>[a-z_:]+):\s+(?P<msg>.*)$"
 )
 KV = re.compile(r'(\w+)=("(?:[^"\\]|\\.)*"|\S+)')
@@ -105,7 +105,9 @@ def parse(lines: list[str], since: str | None) -> list[Turn]:
 
     for raw in lines:
         raw = ANSI.sub("", raw.rstrip("\n"))
-        m = LINE.match(raw)
+        # O CLI imprime fragmentos de fala sem quebra de linha; um evento
+        # de tracing pode começar depois de "Feito." na saída combinada.
+        m = LINE.search(raw)
         if not m:
             continue
         ts, msg = m.group("ts"), clean(m.group("msg"))
@@ -117,7 +119,9 @@ def parse(lines: list[str], since: str | None) -> list[Turn]:
         if msg.startswith("usuário disse "):
             # `usuário disse texto=... via="voz"`: o campo via vem depois do texto
             text = re.sub(r'\s+via="[^"]*"$', "", msg.split("texto=", 1)[-1])
-            if cur is None or cur.ended:
+            # Cada envio de texto é um pedido completo, mesmo se o modelo
+            # não emitiu TurnComplete. Só a voz pode chegar em fragmentos.
+            if cur is None or cur.ended or parse_kv(msg).get("via") == "texto":
                 cur = Turn(started=ts)
                 turns.append(cur)
             cur.user.append(text)

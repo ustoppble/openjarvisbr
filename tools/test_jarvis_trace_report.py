@@ -95,6 +95,19 @@ class AcceptanceTests(unittest.TestCase):
                                  f'skipped_judge={skipped} fala="que horas são?"'], None)
             self.assertEqual(turns[0].reflex[0][2], expected)
 
+    def test_each_typed_request_starts_its_own_turn(self):
+        prefix = '2026-09-19T03:00:00.000Z DEBUG openjarvisbr_core::engine: '
+        lines = [prefix + 'usuário disse texto=volta via="texto"',
+                 prefix + 'usuário disse texto=pesquisa overclock via="texto"']
+        self.assertEqual([t.user for t in trace.parse(lines, None)],
+                         [['volta'], ['pesquisa overclock']])
+
+    def test_cli_text_prefix_does_not_hide_trace_event(self):
+        prefix = '2026-09-19T03:00:00.000Z DEBUG openjarvisbr_core::engine: '
+        lines = [prefix + 'usuário disse texto=volta via="texto"',
+                 'Feito.' + prefix + 'turno do modelo concluído']
+        self.assertTrue(trace.parse(lines, None)[0].ended)
+
     def test_report_masks_addresses_and_bearer(self):
         address = '.'.join(str(n) for n in [192, 0, 2, 7]) + ':8123'
         host = 'example' + '.test'
