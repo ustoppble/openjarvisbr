@@ -293,6 +293,13 @@ impl Reflex {
                     let confidence = confidence_of(&decision, &answers);
                     record_decision(&stats, &decision, latency_ms, false, &heard);
                     if matches!(decision, Decision::Nothing) {
+                        // Sem ação: deixa no trace o que o juiz respondeu, para
+                        // dar para ver por que não agiu (limiar? opção errada?).
+                        debug!(
+                            respostas = %answers_summary(&answers),
+                            perguntas = ?questions.0.keys().collect::<Vec<_>>(),
+                            "reflexo: juiz respondeu mas nada passou do limiar"
+                        );
                         return;
                     }
                     // corrida: outro fragmento pode ter agido no meio
@@ -412,6 +419,25 @@ fn record_unavailable(
         average_latency_ms = snapshot.average_latency_ms(),
         "resumo do reflexo na sessão"
     );
+}
+
+/// "intent=open_site 0.91 | learned=none 0.62 | always 0.01": uma linha com o
+/// que o juiz escolheu em cada pergunta e a probabilidade da escolha.
+fn answers_summary(answers: &Answers) -> String {
+    use crate::reflex::questions::Answer;
+    answers
+        .answers
+        .iter()
+        .map(|(id, answer)| match answer {
+            Answer::Choice { choice, probabilities, .. } => {
+                let p = probabilities.get(choice).copied().unwrap_or(0.0);
+                format!("{id}={choice} {p:.2}")
+            }
+            Answer::Noul { noul } => format!("{id} {noul:.2}"),
+            Answer::Score { score, .. } => format!("{id} score {score:.2}"),
+        })
+        .collect::<Vec<_>>()
+        .join(" | ")
 }
 
 /// Confiança que sustenta a decisão, para telemetria.
