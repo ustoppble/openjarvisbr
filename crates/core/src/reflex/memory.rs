@@ -170,6 +170,38 @@ impl Memory {
         true
     }
 
+    /// Junta o que outra instância gravou (app e CLI compartilham o mesmo
+    /// arquivo; sem isto o último a salvar apagava o que o outro aprendeu).
+    /// Entradas novas entram; (tool, args) repetida fica com o maior `count`,
+    /// o `last_used` mais recente e a frase mais curta. Devolve quantas
+    /// entraram. Teto reaplicado.
+    pub fn merge_from(&mut self, other: &Memory) -> usize {
+        let mut added = 0;
+        for theirs in &other.actions {
+            match self
+                .actions
+                .iter_mut()
+                .find(|a| a.tool == theirs.tool && a.args == theirs.args)
+            {
+                Some(mine) => {
+                    mine.count = mine.count.max(theirs.count);
+                    mine.last_used = mine.last_used.max(theirs.last_used);
+                    if !theirs.phrase.trim().is_empty()
+                        && theirs.phrase.chars().count() < mine.phrase.chars().count()
+                    {
+                        mine.phrase = theirs.phrase.clone();
+                    }
+                }
+                None => {
+                    self.actions.push(theirs.clone());
+                    added += 1;
+                }
+            }
+        }
+        self.enforce_cap();
+        added
+    }
+
     /// Esquece a ação na posição `index`. `None` se não existir.
     pub fn forget(&mut self, index: usize) -> Option<LearnedAction> {
         (index < self.actions.len()).then(|| self.actions.remove(index))
@@ -375,6 +407,37 @@ mod tests {
             .actions()
             .iter()
             .any(|a| a.args == json!({"url": "https://s1.com"})));
+    }
+
+    #[test]
+    fn merge_junta_o_que_a_outra_instancia_aprendeu() {
+        let mut a = Memory::new();
+        a.learn("abre o safari por favor", &call("app.open", json!({"name": "Safari"})));
+        a.learn("abre o safari por favor", &call("app.open", json!({"name": "Safari"})));
+        let mut b = Memory::new();
+        b.learn("abre o safari", &call("app.open", json!({"name": "Safari"})));
+        b.learn("abre a globo", &call("web.open", json!({"url": "https://globo.com"})));
+        assert_eq!(a.merge_from(&b), 1, "só a globo é nova");
+        assert_eq!(a.len(), 2);
+        let safari = &a.actions()[0];
+        assert_eq!(safari.count, 2, "maior count, sem somar a base comum");
+        assert_eq!(safari.phrase, "abre o safari", "frase mais curta vence");
+        assert_eq!(a.actions()[1].phrase, "abre a globo");
+        // idempotente
+        assert_eq!(a.merge_from(&b), 0);
+        assert_eq!(a.len(), 2);
+    }
+
+    #[test]
+    fn merge_respeita_o_teto() {
+        let mut a = Memory::new();
+        for n in 0..MAX_ACTIONS {
+            a.learn(&format!("a{n}"), &call("web.open", json!({"url": format!("https://a{n}.com")})));
+        }
+        let mut b = Memory::new();
+        b.learn("b", &call("web.open", json!({"url": "https://b.com"})));
+        assert_eq!(a.merge_from(&b), 1);
+        assert_eq!(a.len(), MAX_ACTIONS);
     }
 
     #[test]

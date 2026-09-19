@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 
-use tracing::warn;
+use tracing::{debug, warn};
 
 pub use super::memory::{LearnedAction, Memory};
 pub use crate::config::SiteConfig;
@@ -182,17 +182,19 @@ impl EyeHandle {
     /// gravado em background. `false` = nada mudou (frase vazia ou args
     /// sensíveis).
     pub fn learn(&self, phrase: &str, call: &ToolCall) -> bool {
-        self.mutate(|m| m.learn(phrase, call))
+        // aprender junta o que outra instância (app ou CLI) gravou no arquivo
+        self.mutate(true, |m| m.learn(phrase, call))
     }
 
     /// Esquece a ação de índice `index` (o índice de `Inventory.learned`).
+    /// Esquecer é intenção explícita: grava por cima, sem juntar o arquivo.
     pub fn forget(&self, index: usize) -> bool {
-        self.mutate(|m| m.forget(index).is_some())
+        self.mutate(false, |m| m.forget(index).is_some())
     }
 
     /// Esquece tudo.
     pub fn forget_all(&self) {
-        self.mutate(|m| {
+        self.mutate(false, |m| {
             m.clear();
             true
         });
@@ -206,11 +208,24 @@ impl EyeHandle {
             .clone()
     }
 
-    fn mutate(&self, f: impl FnOnce(&mut Memory) -> bool) -> bool {
+    fn mutate(&self, merge_disk: bool, f: impl FnOnce(&mut Memory) -> bool) -> bool {
         let snapshot = {
             let mut mem = self.memory.lock().unwrap_or_else(|e| e.into_inner());
             if !f(&mut mem) {
                 return false;
+            }
+            if merge_disk {
+                if let Some(path) = &self.memory_path {
+                    match Memory::load(path) {
+                        Ok(disk) => {
+                            let added = mem.merge_from(&disk);
+                            if added > 0 {
+                                debug!(added, "memória do reflexo: juntou o que outra instância gravou");
+                            }
+                        }
+                        Err(err) => warn!(%err, "memória do reflexo no disco ignorada ao gravar"),
+                    }
+                }
             }
             mem.clone()
         };
@@ -513,6 +528,53 @@ mod handle_tests {
         let inv = eye.snapshot();
         assert_eq!(inv.running_apps.len(), 1);
         assert_eq!(inv.learned.len(), 1);
+    }
+
+    /// App e CLI abertos ao mesmo tempo gravam o mesmo arquivo: quem grava
+    /// junta o que o outro aprendeu em vez de apagar.
+    #[tokio::test]
+    async fn duas_instancias_no_mesmo_arquivo_nao_se_apagam() {
+        let dir = std::env::temp_dir().join(format!("eye-merge-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = dir.join("reflex_memory.toml");
+        let start = |m: Memory| {
+            Eye::start_with_memory(
+                vec![],
+                vec![],
+                Arc::new(FakeProbe(Mutex::new(vec![]))),
+                Duration::from_secs(3600),
+                Duration::from_secs(3600),
+                m,
+                Some(path.clone()),
+            )
+        };
+        let a = start(Memory::new());
+        let b = start(Memory::new());
+        assert!(a.learn("abre o safari", &call("https://safari.example")));
+        for _ in 0..50 {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+            if Memory::load(&path).map(|m| m.len()).unwrap_or(0) == 1 {
+                break;
+            }
+        }
+        // B não sabia do Safari; ao aprender a globo, junta o arquivo
+        assert!(b.learn("abre a globo", &call("https://globo.com")));
+        let inv = b.snapshot();
+        assert_eq!(inv.learned.len(), 2, "B ficou com o que A gravou");
+        for _ in 0..50 {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+            if Memory::load(&path).map(|m| m.len()).unwrap_or(0) == 2 {
+                break;
+            }
+        }
+        assert_eq!(Memory::load(&path).unwrap().len(), 2, "arquivo tem as duas");
+        // A aprende mais uma e junta a globo do B
+        assert!(a.learn("abre o uol", &call("https://uol.com.br")));
+        assert_eq!(a.snapshot().learned.len(), 3);
+        // esquecer tudo grava por cima, sem ressuscitar do arquivo
+        b.forget_all();
+        assert!(b.snapshot().learned.is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[tokio::test]
