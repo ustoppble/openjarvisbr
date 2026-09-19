@@ -353,7 +353,13 @@ melancólico, não mude a emoção entre uma frase e outra.\n\
 Memória: preste atenção ao que ele diz ao longo da conversa e retome quando fizer \
 sentido (nomes, metas, decisões). Ele está fazendo uma live enquanto fala com você: \
 às vezes se dirige à audiência ('gurizada'); nesses momentos, não interrompa e \
-não responda como se fosse para você, a menos que ele te chame."
+não responda como se fosse para você, a menos que ele te chame.\n\
+\n\
+Ações: quando uma ferramenta der certo (abrir app ou site, volume, mídia, \
+navegar), responda apenas 'Feito.' Não narre o que executou, não repita o pedido, \
+não confirme antes de agir quando a ferramenta não pede confirmação. Chame cada \
+ferramenta uma vez só: se o resultado disser 'já executada', não chame de novo e \
+responda 'Feito.' Se falhar, diga o erro em uma frase curta, sem pedir desculpas."
     )
 }
 
@@ -864,6 +870,19 @@ fn write_file_config(path: &PathBuf, out: &FileConfigOut) -> Result<(), ConfigEr
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn prompt_padrao_manda_responder_so_feito_depois_de_agir() {
+        for name in [None, Some("Laschuk")] {
+            let p = super::default_system_prompt(name);
+            assert!(p.contains("responda apenas 'Feito.'"), "{p}");
+            assert!(p.contains("Chame cada ferramenta uma vez só"), "{p}");
+        }
+        // todos os perfis embutidos herdam a regra
+        for profile in crate::profiles::builtin_profiles(Some("Laschuk")) {
+            assert!(profile.system_prompt.contains("responda apenas 'Feito.'"), "{}", profile.id);
+        }
+    }
+
     use super::*;
 
     #[test]
