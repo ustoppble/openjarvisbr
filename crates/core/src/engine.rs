@@ -3632,27 +3632,49 @@ mod tests {
             handle.stop().await;
         }
 
+        async fn model_text_turn(h: &mut Harness, text: &str) -> Vec<String> {
+            h.script
+                .send(ServerEvent::ModelText(text.into()))
+                .await
+                .unwrap();
+            h.script.send(ServerEvent::TurnComplete).await.unwrap();
+            let mut texts = Vec::new();
+            loop {
+                match next_non_level(&mut h.events).await {
+                    EngineEvent::ModelText(t) => texts.push(t),
+                    EngineEvent::TurnComplete => return texts,
+                    _ => {}
+                }
+            }
+        }
+
         #[tokio::test]
         async fn repeated_model_speech_is_dropped() {
             let mut h = start_tools(&["*"], Duration::from_secs(5)).await;
-            let turn = async |h: &mut Harness, text: &str| -> Vec<String> {
-                h.script
-                    .send(ServerEvent::ModelText(text.into()))
-                    .await
-                    .unwrap();
-                h.script.send(ServerEvent::TurnComplete).await.unwrap();
-                let mut texts = Vec::new();
-                loop {
-                    match next_non_level(&mut h.events).await {
-                        EngineEvent::ModelText(t) => texts.push(t),
-                        EngineEvent::TurnComplete => return texts,
-                        _ => {}
-                    }
-                }
-            };
-            assert_eq!(turn(&mut h, "Pronto, listei.").await, ["Pronto, listei."]);
-            assert!(turn(&mut h, "pronto listei").await.is_empty());
-            assert_eq!(turn(&mut h, "Abri o Safari.").await, ["Abri o Safari."]);
+            assert_eq!(
+                model_text_turn(&mut h, "O Safari foi aberto.").await,
+                ["O Safari foi aberto."]
+            );
+            assert!(model_text_turn(&mut h, "o safari foi aberto").await.is_empty());
+            assert_eq!(model_text_turn(&mut h, "Abri o Chrome.").await, ["Abri o Chrome."]);
+            h.handle.stop().await;
+        }
+
+        #[tokio::test]
+        async fn short_model_confirmations_are_not_dropped() {
+            let _ = tracing_subscriber::fmt()
+                .with_max_level(tracing::Level::DEBUG)
+                .with_test_writer()
+                .try_init();
+            let mut h = start_tools(&["*"], Duration::from_secs(5)).await;
+            for text in ["Feito.", "Pronto.", "Feito, sim.", "Já está feito."] {
+                let first = model_text_turn(&mut h, text).await;
+                let second = model_text_turn(&mut h, text).await;
+                assert_eq!(first, [text]);
+                assert_eq!(second, [text]);
+                info!(fala = text, emitidas = first.len() + second.len(),
+                    "confirmação preservada em turnos consecutivos");
+            }
             h.handle.stop().await;
         }
 

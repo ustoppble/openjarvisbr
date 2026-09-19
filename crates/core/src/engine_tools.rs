@@ -64,17 +64,18 @@ pede confirmação e os arquivos podem estar em qualquer pasta do computador, \
 não só no home.";
 
 /// Uma fala repetida só descarta a partir deste número de palavras quando
-/// ainda está chegando (prefixo da anterior); igual por inteiro descarta
-/// sempre.
+/// ainda está chegando (prefixo da anterior). A igualdade completa também
+/// descarta, exceto nas falas curtas de confirmação.
 const REPEAT_PREFIX_WORDS: usize = 6;
 
 /// A fala do modelo neste turno repete a do turno anterior? Compara
 /// normalizado (sem caixa, acento nem pontuação): igual por inteiro, ou, ainda
 /// chegando, um prefixo de pelo menos [`REPEAT_PREFIX_WORDS`] palavras.
+/// Falas de até três palavras, como "Feito.", podem se repetir legitimamente.
 pub fn is_repeat(current: &str, previous: &str) -> bool {
     let current = normalize_words(current);
     let previous = normalize_words(previous);
-    if current.is_empty() || previous.is_empty() {
+    if current.len() <= 3 || previous.is_empty() {
         return false;
     }
     current == previous
@@ -323,7 +324,21 @@ mod tests {
         assert!(!is_repeat("Pronto, abri o Safari.", previous));
         assert!(!is_repeat("", previous));
         assert!(!is_repeat("Pronto.", ""));
-        assert!(is_repeat("Pronto.", "pronto"));
+        assert!(!is_repeat("Pronto.", "pronto"));
+        assert!(is_repeat("O Safari foi aberto.", "O Safari foi aberto."));
+    }
+
+    #[test]
+    fn short_model_confirmations_are_not_repeats() {
+        for (current, previous) in [
+            ("Feito.", "Feito."),
+            ("Pronto.", "pronto"),
+            ("Feito, sim.", "FEITO sim"),
+            ("Feito, sim, senhor!", "feito sim senhor"),
+            ("Já está feito.", "ja esta feito"),
+        ] {
+            assert!(!is_repeat(current, previous), "confirmação descartada: {current}");
+        }
     }
 
     #[test]
