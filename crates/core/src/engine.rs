@@ -2942,6 +2942,81 @@ mod tests {
         handle.stop().await;
     }
 
+    /// JRV-108: sequência do trace de 03:04, pelo caminho do texto digitado.
+    /// Cada resposta de ferramenta pode abrir outro turno, sem outro pedido.
+    #[tokio::test]
+    async fn tres_web_open_entre_turnos_do_mesmo_texto_executam_uma_vez() {
+        use crate::reflex::judge::FakeJudge;
+
+        let _ = tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::DEBUG)
+            .with_test_writer()
+            .try_init();
+        let eye = empty_eye();
+        let spy = SpyTool::new("web.open", Risk::Safe);
+        let (handle, mut events, script_tx) =
+            start_reflex_engine(&spy, Arc::new(FakeJudge::new()), eye.clone()).await;
+        // O spy não acessa a rede; os argumentos apenas identificam a ação.
+        let args = serde_json::json!({"destination": "globo"});
+        handle.send_user_text("abre a globo");
+        loop {
+            if let EngineEvent::UserText(text) = next_non_level(&mut events).await {
+                assert_eq!(text, "abre a globo");
+                break;
+            }
+        }
+        for id in ["g1", "g2", "g3"] {
+            script_tx
+                .send(ServerEvent::ToolCall(vec![ToolCall {
+                    id: id.into(),
+                    name: "web.open".into(),
+                    args: args.clone(),
+                }]))
+                .await
+                .unwrap();
+            script_tx.send(ServerEvent::TurnComplete).await.unwrap();
+            let mut result = None;
+            let mut ended = false;
+            while result.is_none() || !ended {
+                match next_non_level(&mut events).await {
+                    EngineEvent::TurnComplete => ended = true,
+                    EngineEvent::ToolResult { id: got, ok, summary, .. } if got == id => {
+                        assert!(ok);
+                        result = Some(summary);
+                    }
+                    _ => {}
+                }
+            }
+            if id != "g1" {
+                assert!(result.unwrap().contains("já executada"), "{id} não foi deduplicada");
+            }
+        }
+        assert_eq!(spy.count(), 1, "três chamadas do mesmo pedido executaram mais de uma vez");
+        let learned = eye.snapshot().learned.clone();
+        assert_eq!(learned.len(), 1);
+        assert_eq!(learned[0].phrase, "abre a globo");
+        assert_eq!(learned[0].count, 1);
+
+        // Outro pedido explícito, depois da folga do fake, pode executar de novo.
+        tokio::time::sleep(Duration::from_millis(120)).await;
+        handle.send_user_text("abre a globo");
+        loop {
+            if let EngineEvent::UserText(_) = next_non_level(&mut events).await {
+                break;
+            }
+        }
+        script_tx
+            .send(ServerEvent::ToolCall(vec![ToolCall {
+                id: "new-request".into(), name: "web.open".into(), args,
+            }]))
+            .await
+            .unwrap();
+        assert!(wait_tool_result(&mut events, "new-request").await.0);
+        assert_eq!(spy.count(), 2, "pedido novo foi indevidamente deduplicado");
+        assert_eq!(eye.snapshot().learned[0].count, 2);
+        handle.stop().await;
+    }
+
     #[tokio::test]
     async fn texto_do_modelo_preserva_atribuicao_para_tool_no_turno_seguinte() {
         use crate::reflex::judge::FakeJudge;
