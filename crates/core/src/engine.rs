@@ -1656,10 +1656,20 @@ impl Worker {
 
     /// Ação do modelo que deu certo vira memória do reflexo, com a frase que
     /// o usuário disse. Sem frase (o modelo agiu sozinho) não há o que
-    /// reconhecer depois: não aprende.
+    /// reconhecer depois: não aprende. A aprovação pontual ou da sessão não
+    /// autoriza aprender ações `Confirm`; só a liberação permanente autoriza.
     fn learn(&mut self, phrase: &str, call: &ToolCall) {
         let phrase = phrase.trim();
         if phrase.is_empty() {
+            return;
+        }
+        let Some(spec) = self.registry.get(&call.name).map(|tool| tool.spec()) else {
+            return;
+        };
+        if self.policy.risk(&spec) == Risk::Confirm
+            && !self.decisions.always_allow().contains(&call.name)
+        {
+            info!(ferramenta = %call.name, "reflexo não aprende ação Confirm sem liberação permanente");
             return;
         }
         let Some(reflex) = self.reflex.as_ref() else {
@@ -2668,6 +2678,110 @@ mod tests {
         assert_eq!(learned[0].args, call.args);
         assert_eq!(learned[0].phrase, "abre a globo");
         assert_eq!(learned[0].count, 1);
+        handle.stop().await;
+    }
+
+    async fn confirm_aprovada_na_sessao_nao_e_aprendida(name: &'static str, declared_risk: Risk) {
+        use crate::reflex::judge::FakeJudge;
+
+        let _ = tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::DEBUG)
+            .with_test_writer()
+            .try_init();
+        let eye = empty_eye();
+        let spy = SpyTool::new(name, declared_risk);
+        let (handle, mut events, script_tx) =
+            start_reflex_engine(&spy, Arc::new(FakeJudge::new()), eye.clone()).await;
+        script_tx
+            .send(ServerEvent::UserText("executa o teste".into()))
+            .await
+            .unwrap();
+        script_tx
+            .send(ServerEvent::ToolCall(vec![ToolCall {
+                id: "confirmed-once".into(),
+                name: name.into(),
+                args: serde_json::json!({"operation": "first-test"}),
+            }]))
+            .await
+            .unwrap();
+        loop {
+            if let EngineEvent::ToolConfirmNeeded { id, .. } = next_non_level(&mut events).await {
+                assert_eq!(id, "confirmed-once");
+                break;
+            }
+        }
+        handle.confirm_tool("confirmed-once", true);
+        assert!(wait_tool_result(&mut events, "confirmed-once").await.0);
+        assert_eq!(spy.count(), 1);
+        assert!(
+            eye.snapshot().learned.is_empty(),
+            "aprovação única virou memória"
+        );
+
+        // A autorização de sessão permite executar de novo, mas não aprender.
+        script_tx.send(ServerEvent::TurnComplete).await.unwrap();
+        script_tx
+            .send(ServerEvent::UserText("executa outro teste".into()))
+            .await
+            .unwrap();
+        script_tx
+            .send(ServerEvent::ToolCall(vec![ToolCall {
+                id: "session-approved".into(),
+                name: name.into(),
+                args: serde_json::json!({"operation": "second-test"}),
+            }]))
+            .await
+            .unwrap();
+        assert!(wait_tool_result(&mut events, "session-approved").await.0);
+        assert_eq!(spy.count(), 2);
+        assert!(
+            eye.snapshot().learned.is_empty(),
+            "liberação de sessão virou memória"
+        );
+        handle.stop().await;
+    }
+
+    #[tokio::test]
+    async fn reflexo_nao_aprende_confirm_shell_aprovada_uma_vez() {
+        confirm_aprovada_na_sessao_nao_e_aprendida("shell.run", Risk::Confirm).await;
+    }
+
+    #[tokio::test]
+    async fn reflexo_nao_aprende_confirm_mcp_mesmo_declarada_safe() {
+        confirm_aprovada_na_sessao_nao_e_aprendida("mcp.overclock.pane_write", Risk::Safe).await;
+    }
+
+    #[tokio::test]
+    async fn reflexo_aprende_confirm_liberada_para_sempre() {
+        use crate::reflex::judge::FakeJudge;
+
+        let eye = empty_eye();
+        let spy = SpyTool::new("shell.run", Risk::Confirm);
+        let (handle, mut events, script_tx) =
+            start_reflex_engine(&spy, Arc::new(FakeJudge::new()), eye.clone()).await;
+        script_tx
+            .send(ServerEvent::UserText("executa o teste".into()))
+            .await
+            .unwrap();
+        script_tx
+            .send(ServerEvent::ToolCall(vec![ToolCall {
+                id: "always".into(),
+                name: "shell.run".into(),
+                args: serde_json::json!({"operation": "safe-test-double"}),
+            }]))
+            .await
+            .unwrap();
+        loop {
+            if let EngineEvent::ToolConfirmNeeded { .. } = next_non_level(&mut events).await {
+                break;
+            }
+        }
+        handle.set_always_allow(vec!["shell.run".into()]);
+        handle.confirm_tool("always", true);
+        assert!(wait_tool_result(&mut events, "always").await.0);
+        let learned = eye.snapshot().learned.clone();
+        assert_eq!(learned.len(), 1);
+        assert_eq!(learned[0].phrase, "executa o teste");
         handle.stop().await;
     }
 
