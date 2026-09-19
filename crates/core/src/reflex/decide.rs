@@ -15,6 +15,8 @@ use crate::tools::ToolCall;
 pub const MAX_CANDIDATES: usize = 40;
 /// Teto de ações aprendidas oferecidas por pergunta.
 pub const MAX_LEARNED: usize = 20;
+/// Com casamento forte (≥2 tokens em comum), poucas opções: o juiz acerta mais.
+pub const MAX_LEARNED_STRONG: usize = 5;
 pub const NONE: &str = "none";
 /// Prefixo das chaves da pergunta `learned` (`l0`, `l1`, …): índice em `Inventory.learned`.
 pub const LEARNED_KEY_PREFIX: &str = "l";
@@ -117,26 +119,40 @@ fn learned_tokens(text: &str) -> Vec<String> {
         .collect()
 }
 
-/// Ações aprendidas cuja frase compartilha ≥1 token (≥3 letras) com a fala,
-/// as `MAX_LEARNED` de maior `count`. O `usize` é o índice em `inv.learned`
-/// (estável: vira a chave `l{i}` da pergunta).
+/// Ações aprendidas ordenadas pelos tokens em comum e depois por `count`.
+/// Com ≥2 tokens em comum, oferece só o melhor nível, até `MAX_LEARNED_STRONG`;
+/// com um token, oferece até `MAX_LEARNED`. O índice em `inv.learned` é estável
+/// e vira a chave `l{i}` da pergunta.
 pub fn learned_candidates<'a>(heard: &str, inv: &'a Inventory) -> Vec<(usize, &'a LearnedAction)> {
     let heard_tokens: BTreeSet<String> = learned_tokens(heard).into_iter().collect();
     if heard_tokens.is_empty() {
         return Vec::new();
     }
-    let mut out: Vec<(usize, &LearnedAction)> = inv
+    // (índice, ação, tokens em comum). Com 20 opções que só compartilham
+    // "abre", o juiz dilui a probabilidade (trace 03:04:03: learned=l20 0.40).
+    // Por isso: quem compartilha mais tokens vem primeiro, e se alguém casa
+    // com ≥2 tokens, só esse nível entra na pergunta.
+    let mut scored: Vec<(usize, &LearnedAction, usize)> = inv
         .learned
         .iter()
         .enumerate()
-        .filter(|(_, a)| {
-            learned_tokens(&a.phrase)
-                .iter()
-                .any(|t| heard_tokens.contains(t))
+        .filter_map(|(i, a)| {
+            let shared = learned_tokens(&a.phrase)
+                .into_iter()
+                .filter(|t| heard_tokens.contains(t))
+                .collect::<BTreeSet<_>>()
+                .len();
+            (shared > 0).then_some((i, a, shared))
         })
         .collect();
-    out.sort_by_key(|(_, a)| std::cmp::Reverse(a.count));
-    out.truncate(MAX_LEARNED);
+    scored.sort_by_key(|(_, a, shared)| (std::cmp::Reverse(*shared), std::cmp::Reverse(a.count)));
+    let best = scored.first().map(|(_, _, shared)| *shared).unwrap_or(0);
+    let mut out: Vec<(usize, &LearnedAction)> = scored
+        .into_iter()
+        .filter(|(_, _, shared)| best < 2 || *shared == best)
+        .map(|(i, a, _)| (i, a))
+        .collect();
+    out.truncate(if best >= 2 { MAX_LEARNED_STRONG } else { MAX_LEARNED });
     out
 }
 
@@ -696,6 +712,35 @@ mod tests {
         )]);
 
         assert!(learned_candidates("que horas são?", &i).is_empty());
+    }
+
+    /// Trace 03:04:03: "abre a globo" com 20 aprendidas compartilhando só
+    /// "abre" → learned=l20 0.40. Quem casa em 2 tokens fica sozinho na lista.
+    #[test]
+    fn candidatas_aprendidas_casamento_forte_exclui_as_fracas() {
+        let mut actions: Vec<LearnedAction> = (0..25)
+            .map(|n| learned(&format!("abre o site {n}"), "web.open", json!({"url": format!("https://s{n}.com")}), 50 - n))
+            .collect();
+        actions.push(learned("abre a globo", "web.open", json!({"url": "https://globo.com"}), 1));
+        let i = inv_learned(actions);
+        let c = learned_candidates("abre a globo", &i);
+        assert_eq!(c.len(), 1, "{c:?}");
+        assert_eq!(c[0].0, 25);
+        // só um token em comum: volta a lista larga, por count
+        let c2 = learned_candidates("abre aí", &i);
+        assert_eq!(c2.len(), MAX_LEARNED);
+        assert_eq!(c2[0].1.count, 50);
+        // dois casamentos fortes empatados: os dois entram, por count
+        let mut two = vec![
+            learned("abre a globo", "web.open", json!({"url": "https://globo.com"}), 1),
+            learned("abre a globo agora", "web.open", json!({"url": "https://globo.com/agora"}), 3),
+            learned("abre o safari", "app.open", json!({"name": "Safari"}), 9),
+        ];
+        two.rotate_left(1);
+        let two = inv_learned(two);
+        let c3 = learned_candidates("abre a globo", &two);
+        assert_eq!(c3.len(), 2);
+        assert_eq!(c3[0].1.count, 3);
     }
 
     #[test]
