@@ -355,13 +355,16 @@ sentido (nomes, metas, decisões). Ele está fazendo uma live enquanto fala com 
 às vezes se dirige à audiência ('gurizada'); nesses momentos, não interrompa e \
 não responda como se fosse para você, a menos que ele te chame.\n\
 \n\
-Ações: quando uma ferramenta der certo (abrir app ou site, volume, mídia, \
-navegar), responda apenas 'Feito.' Não narre o que executou, não repita o pedido, \
-não confirme antes de agir quando a ferramenta não pede confirmação. Chame cada \
-ferramenta uma vez só: se o resultado disser 'já executada', não chame de novo e \
-responda 'Feito.' Se falhar, diga o erro em uma frase curta, sem pedir desculpas."
+{ACTIONS_RULE}"
     )
 }
+
+/// Regra de ações, no prompt padrão e no customizado: depois de agir, só "Feito.".
+pub const ACTIONS_RULE: &str = "Ações: quando uma ferramenta der certo (abrir app ou site, \
+volume, mídia, navegar), responda apenas 'Feito.' Não narre o que executou, não repita o \
+pedido, não confirme antes de agir quando a ferramenta não pede confirmação. Chame cada \
+ferramenta uma vez só: se o resultado disser 'já executada', não chame de novo e responda \
+'Feito.' Se falhar, diga o erro em uma frase curta, sem pedir desculpas.";
 
 /// Aplica o nome salvo (ou "você", sem nome) num `system_prompt` próprio do
 /// usuário, substituindo a marcação `{nome}` quando ela existir. Sem
@@ -371,11 +374,16 @@ pub fn apply_user_name(prompt: &str, user_name: Option<&str>) -> String {
     prompt.replace(NAME_PLACEHOLDER, name)
 }
 
-/// System prompt efetivo: o `system_prompt` customizado (com `{nome}`
-/// substituído) quando existir, senão o prompt do perfil ativo.
+/// System prompt efetivo: o customizado (com `{nome}` substituído e a regra
+/// de ações) quando existir, senão o prompt do perfil ativo.
 pub fn effective_system_prompt(settings: &Settings) -> String {
     match &settings.system_prompt {
-        Some(custom) => apply_user_name(custom, settings.user_name.as_deref()),
+        // Prompt próprio do usuário: a regra de ações ("Feito.") vale mesmo
+        // assim, senão ela só existiria para quem usa o prompt padrão.
+        Some(custom) => format!(
+            "{}\n\n{ACTIONS_RULE}",
+            apply_user_name(custom, settings.user_name.as_deref())
+        ),
         None => effective_profile(settings).system_prompt,
     }
 }
@@ -877,6 +885,15 @@ mod tests {
             assert!(p.contains("responda apenas 'Feito.'"), "{p}");
             assert!(p.contains("Chame cada ferramenta uma vez só"), "{p}");
         }
+        // prompt customizado do usuário também recebe a regra
+        let settings = Settings {
+            system_prompt: Some("Você é o Zé, assistente de {nome}.".into()),
+            user_name: Some("Laschuk".into()),
+            ..Default::default()
+        };
+        let p = effective_system_prompt(&settings);
+        assert!(p.starts_with("Você é o Zé, assistente de Laschuk."), "{p}");
+        assert!(p.contains("responda apenas 'Feito.'"), "{p}");
         // todos os perfis embutidos herdam a regra
         for profile in crate::profiles::builtin_profiles(Some("Laschuk")) {
             assert!(profile.system_prompt.contains("responda apenas 'Feito.'"), "{}", profile.id);
@@ -1201,7 +1218,10 @@ mod tests {
         );
 
         settings.system_prompt = Some("Fale com {nome}.".to_string());
-        assert_eq!(effective_system_prompt(&settings), "Fale com Maria.");
+        assert_eq!(
+            effective_system_prompt(&settings),
+            format!("Fale com Maria.\n\n{ACTIONS_RULE}")
+        );
     }
 
     #[test]
