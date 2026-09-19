@@ -9,7 +9,7 @@ turnos: o que o usuário disse, o que o modelo respondeu, que tools foram
 pedidas/concluídas (origem modelo/reflexo, ms, erro), decisões do reflexo
 (latência do Jev) e duplicatas (mesma ação executada pelas duas origens).
 
-Nunca imprime segredos: só reaproveita o resumo já mascarado do engine.
+Mascara segredos e endereços também na saída, antes de imprimir ou gravar.
 """
 
 from __future__ import annotations
@@ -32,6 +32,18 @@ AIZA = re.compile(r"AIza[0-9A-Za-z_-]+")
 
 def clean(text: str) -> str:
     return AIZA.sub("***", text)
+
+
+def redact_output(text: str) -> str:
+    # Aplicar depois da análise: mascarar destinos antes de comparar ações
+    # confundiria URLs distintas e produziria duplicatas falsas.
+    text = clean(text)
+    text = re.sub(r"(?i)(?:https?|wss?|ssh)://[^\s<>\]\)\"'`]+", "***", text)
+    text = re.sub(r"\b(?:\d{1,3}\.){3}\d{1,3}(?::\d+)?\b", "***", text)
+    text = re.sub(r"(?i)\b(?:localhost|[A-Za-z0-9.-]+\.(?:internal|local|com|net|org|io|dev|ai|sh|br|app|test|invalid))(?::\d+)?\b", "***", text)
+    text = re.sub(r"(?i)(bearer\s+)[^\s\"']+", r"\1***", text)
+    text = re.sub(r'(?i)((?:api[_-]?key|token|secret|password|authorization|cookie)[\"\x27]?\s*[:=]\s*)(?:"[^"\n]*"|[^\s,;]+)', r'\1***', text)
+    return text
 
 
 def parse_kv(rest: str) -> dict[str, str]:
@@ -64,7 +76,7 @@ class Turn:
     user: list[str] = field(default_factory=list)
     model: list[str] = field(default_factory=list)
     tools: dict[str, Tool] = field(default_factory=dict)
-    reflex: list[tuple[str, str, int]] = field(default_factory=list)  # (ts, decisão, ms)
+    reflex: list[tuple[str, str, int]] = field(default_factory=list)  # ms=-1: Jev não consultado
     learned: list[str] = field(default_factory=list)
     dedup: list[str] = field(default_factory=list)
     pulos: list[str] = field(default_factory=list)  # reflexo mudo por falha de infra
@@ -146,7 +158,9 @@ def parse(lines: list[str], since: str | None) -> list[Turn]:
             if nm:
                 name = nm.group(1)
             lat = re.search(r"latency_ms=(\d+)", msg)
-            turn_for(ts).reflex.append((ts, f"{dec}{(' ' + name) if name else ''}", int(lat.group(1)) if lat else -1))
+            skipped = parse_kv(msg).get("skipped_judge") == "true"
+            latency = -1 if skipped else int(lat.group(1)) if lat else 0
+            turn_for(ts).reflex.append((ts, f"{dec}{(' ' + name) if name else ''}", latency))
         elif msg.startswith("reflexo pulou esta rodada"):
             # O reflexo ficou mudo por falha de infra (Jev fora do ar ou lento).
             # Sem isso no resumo, a rodada parece só "o modelo agiu mais" e o
@@ -274,7 +288,8 @@ def report(turns: list[Turn]) -> str:
             ms = f"{t.ms} ms" if t.ms is not None else "?"
             lines.append(f"- tool `{t.pedido or t.name}` origem={t.origem} {ms} {status}")
         for (ts, dec, ms) in tr.reflex:
-            lines.append(f"- reflexo {dec} (Jev {ms} ms)")
+            judge = f"Jev {ms} ms" if ms >= 0 else "Jev não consultado"
+            lines.append(f"- reflexo {dec} ({judge})")
         for n in tr.notes:
             lines.append(f"- {n}")
         for d in tr.dedup:
@@ -294,10 +309,10 @@ def report(turns: list[Turn]) -> str:
         lines.append("")
     if dups:
         lines += ["## Duplicatas", ""] + [f"- {d}" for d in dups] + [""]
-    return "\n".join(lines)
+    return redact_output("\n".join(lines))
 
 
-def aceitacao(turns: list[Turn]) -> tuple[list[tuple[bool, str]], bool]:
+def aceitacao(turns: list[Turn], runner_exit: int | None = None) -> tuple[list[tuple[bool, str]], bool]:
     """Os critérios da missão, checados por máquina.
 
     O loop de autoaprimoramento precisa saber sozinho quando parar. Olho humano
@@ -305,7 +320,7 @@ def aceitacao(turns: list[Turn]) -> tuple[list[tuple[bool, str]], bool]:
     tendo duas dentro.
     """
     dups = [d for tr in turns for d in duplicates(tr)]
-    fails = [t for tr in turns for t in tr.tools.values() if t.erro]
+    fails = [t for tr in turns for t in tr.tools.values() if t.ok is False or t.erro]
     recusas = [tr for tr in turns if recusa("".join(tr.model))]
 
     checks: list[tuple[bool, str]] = [
@@ -313,19 +328,48 @@ def aceitacao(turns: list[Turn]) -> tuple[list[tuple[bool, str]], bool]:
         (not fails, f"falhas de tool = {len(fails)} (esperado 0)"),
         (not recusas, f"recusas do modelo = {len(recusas)} (esperado 0)"),
     ]
+    if runner_exit is not None:
+        checks.append((runner_exit == 0, f"runner exit = {runner_exit} (esperado 0)"))
+
+    # Ausência de erros não prova execução: um log vazio também tem 0/0/0.
+    # Exigir cada ação do roteiro e a ferramenta correspondente concluída.
+    required = [
+        ("abre o Safari", r"abre o safari", {"app.open"}),
+        ("Google no Safari", r"abre o google\S* no safari", {"web.open", "browser.goto"}),
+        ("abre o Chrome", r"abre o chrome", {"app.open"}),
+        ("abre o youtube no Chrome", r"abre o youtube no chrome", {"web.open", "browser.goto"}),
+        ("volta", r"volta", {"browser.back"}),
+        ("pesquisa overclock", r"pesquisa overclock", {"browser.search"}),
+        ("abre a Calculadora", r"abre a calculadora", {"app.open"}),
+        ("abre a globo", r"abre a globo", {"web.open", "browser.goto"}),
+        ("diminui o som", r"diminui o som", {"sys.volume"}),
+        ("coloca o volume em 30", r"coloca o volume em 30", {"sys.volume"}),
+    ]
+    for label, phrase, names in required:
+        matching = [tr for tr in turns if re.fullmatch(phrase, ' '.join(tr.user).strip(), re.I)]
+        ok = bool(matching) and all(any(t.ok is True and t.name in names
+                                       for t in tr.tools.values()) for tr in matching)
+        checks.append((ok, f'ação "{label}" concluída'))
+
+    times = [tr for tr in turns if ' '.join(tr.user).strip().casefold() == "que horas são?"]
+    time_ok = bool(times) and all(tr.reflex and all(ms < 0 for _, _, ms in tr.reflex)
+                                and not tr.pulos for tr in times)
+    checks.append((time_ok, '"que horas são?" com Jev não consultado'))
 
     # Item 6 do roteiro: a mesma fala repetida tem de sair pelo reflexo na
     # segunda vez — é o que prova que a memória do reflexo está sendo usada.
     falas: dict[str, list[Turn]] = {}
     for tr in turns:
-        fala = ' '.join(tr.user).strip()
+        fala = ' '.join(tr.user).strip().casefold()
         if fala:
             falas.setdefault(fala, []).append(tr)
+    checks.append((len(falas.get("abre a globo", [])) >= 2, '"abre a globo" presente duas vezes'))
     for fala, repetidos in falas.items():
         if len(repetidos) < 2:
             continue
         segunda = repetidos[1]
-        origens = {t.origem for t in segunda.tools.values()}
+        origens = {t.origem for t in segunda.tools.values() if t.ok is True
+                   and (fala != "abre a globo" or t.name in {"web.open", "browser.goto"})}
         ok = "reflexo" in origens
         checks.append((ok, f'fala repetida "{fala[:40]}" — 2ª vez por {sorted(origens) or ["ninguém"]} (esperado reflexo)'))
 
@@ -338,13 +382,14 @@ def main() -> int:
     ap.add_argument("--since", help="ISO parcial, ex.: 2026-09-18T19:37")
     ap.add_argument("--aceitacao", action="store_true",
                     help="checa os critérios da missão e sai 1 se algum falhar")
+    ap.add_argument("--runner-exit", type=int, help="código de saída do runner desta rodada")
     args = ap.parse_args()
     with open(args.log, encoding="utf-8", errors="replace") as f:
         turns = parse(f.readlines(), args.since)
     if args.aceitacao:
-        checks, passou = aceitacao(turns)
+        checks, passou = aceitacao(turns, args.runner_exit)
         for ok, texto in checks:
-            print(f"[{'PASSA' if ok else 'FALHA'}] {texto}")
+            print(redact_output(f"[{'PASSA' if ok else 'FALHA'}] {texto}"))
         print("\nROTEIRO PASSOU" if passou else "\nROTEIRO NÃO PASSOU")
         return 0 if passou else 1
     print(report(turns))

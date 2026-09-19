@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Rodada de aceitação da missão "Autonomia do Jarvis", num comando só.
 #
-#   tools/rodada_final.sh [ROTEIRO] [NOME]
+#   tools/rodada_final.sh [ROTEIRO] [NOME] [OPÇÕES DO JARVIS...]
 #
 # 1. fecha o app de desktop (ele ouve o mic e responderia ao áudio do CLI);
 # 2. compila o CLI em release;
@@ -16,9 +16,9 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 ROTEIRO="${1:-$ROOT/docs/testes/roteiro-autonomia.txt}"
 NOME="${2:-rodada-final}"
+if [ "$#" -ge 2 ]; then shift 2; else shift "$#"; fi
 STAMP="$(date +%Y-%m-%d-%H%M)"
 LOG="/tmp/jarvis-${NOME}-${STAMP}.log"
-OUT="/tmp/jarvis-${NOME}-${STAMP}.out"
 DOC="$ROOT/docs/superpowers/briefs/${STAMP}-${NOME}.md"
 export PATH="$HOME/.cargo/bin:$PATH"
 export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$ROOT/target-5834}"
@@ -33,14 +33,14 @@ echo "== 3/5 rodando $ROTEIRO (trace em $LOG)"
 INICIO="$(date -u +%Y-%m-%dT%H:%M:%S)"
 set +e
 RUST_LOG="info,openjarvisbr_core=debug,openjarvisbr_core::audio=warn" \
-  "$CARGO_TARGET_DIR/release/jarvis" --script "$ROTEIRO" >"$OUT" 2>"$LOG"
+  "$CARGO_TARGET_DIR/release/jarvis" --script "$ROTEIRO" "$@" >"$LOG" 2>&1 </dev/null
 RC=$?
 set -e
 echo "   runner exit=$RC"
 
 echo "== 4/5 relatório + régua"
 set +e
-python3 "$ROOT/tools/jarvis_trace_report.py" "$LOG" --since "$INICIO" --aceitacao >"/tmp/jarvis-${NOME}-${STAMP}.aceitacao.txt" 2>&1
+python3 "$ROOT/tools/jarvis_trace_report.py" "$LOG" --since "$INICIO" --aceitacao --runner-exit "$RC" >"/tmp/jarvis-${NOME}-${STAMP}.aceitacao.txt" 2>&1
 PASSOU=$?
 set -e
 cat "/tmp/jarvis-${NOME}-${STAMP}.aceitacao.txt"
