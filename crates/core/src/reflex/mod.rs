@@ -586,6 +586,7 @@ mod tests {
         judge.push_err(JudgeError::Timeout);
         judge.push(open_safari());
         let (reflex, mut rx) = Reflex::new(settings(), judge.clone(), eye());
+        let mut status = reflex.subscribe_status();
 
         reflex.hear("abre o safari".into(), false);
 
@@ -595,6 +596,12 @@ mod tests {
             .expect("o reflexo deve emitir a decisão");
         assert!(matches!(out.decision, Decision::Act(ref c) if c.name == "app.open"));
         assert_eq!(judge.calls().len(), 2);
+        assert!(matches!(
+            status.try_recv().unwrap(),
+            ReflexStatus::Retrying { attempt: 2, .. }
+        ));
+        assert_eq!(reflex.stats().retries, 1);
+        assert_eq!(reflex.stats().unavailable, 0);
     }
 
     #[tokio::test]
@@ -610,6 +617,8 @@ mod tests {
 
         assert_eq!(judge.calls().len(), 2);
         assert_eq!(reflex.stats().total, 1);
+        assert_eq!(reflex.stats().retries, 1);
+        assert_eq!(reflex.stats().unavailable, 1);
         assert!(matches!(
             status.try_recv().unwrap(),
             ReflexStatus::Retrying { attempt: 2, .. }
@@ -654,6 +663,19 @@ mod tests {
         ));
         assert!(started.elapsed() < Duration::from_millis(650));
         assert_eq!(judge.calls.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn erro_que_nao_e_timeout_nao_retenta() {
+        let judge = Arc::new(FakeJudge::new());
+        judge.push_err(JudgeError::RateLimited);
+        let (reflex, _rx) = Reflex::new(settings(), judge.clone(), eye());
+
+        reflex.hear("abre o safari".into(), false);
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        assert_eq!(judge.calls().len(), 1);
+        assert_eq!(reflex.stats().retries, 0);
     }
 
     #[tokio::test]
